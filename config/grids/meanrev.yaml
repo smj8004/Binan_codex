@@ -1,0 +1,66 @@
+# Mean Reversion Strategy Family Grid (OPTIMIZED)
+# Reduced from 1,036,800 → ~36,000 configs (29x reduction)
+# Based on: Bollinger Bands, RSI, Z-score statistical arbitrage
+
+family: meanrev
+
+strategies:
+  bollinger:
+    bb_period: [20, 30]           # 4 → 2: standard/long
+    bb_std: [2.0, 2.5]            # 3 → 2: keep realistic range
+    rsi_period: [14, 21]          # 3 → 2: standard/long
+    rsi_oversold: [25, 30]        # 3 → 2: aggressive/moderate
+    rsi_overbought: [70, 75]      # 3 → 2: moderate/aggressive
+
+  zscore:
+    lookback: [20, 50]            # 4 → 2: medium/long
+    entry_zscore: [2.0, 2.5]      # 3 → 2: moderate/extreme
+    exit_zscore: [0.5, 1.0]       # 3 → 2: early/late
+
+  rsi:
+    rsi_fast: [7, 9]              # 3 → 2: fast/medium
+    rsi_slow: [14, 21]            # 2 → 2: keep both
+    oversold: [30]                # 3 → 1: standard
+    overbought: [70]              # 3 → 1: standard
+
+  stoch_rsi:
+    rsi_period: [14]              # 2 → 1: standard only
+    stoch_period: [14, 21]        # 2 → 2: keep both
+    oversold: [20, 25]            # 3 → 2: extreme/moderate
+    overbought: [75, 80]          # 3 → 2: moderate/extreme
+
+# Risk management
+risk:
+  stop_loss_pct: [0.01, 0.02, 0.025]    # 4 → 3: tighter for meanrev
+  take_profit_pct: [0.015, 0.02, 0.025] # 4 → 3: tighter targets
+
+# Trading costs
+costs:
+  profiles:
+    conservative:
+      slippage_bps: 5
+      fee_taker_bps: 6
+    base:
+      slippage_bps: 3
+      fee_taker_bps: 4
+
+# Position settings
+position:
+  leverage: [1, 2]              # 3 → 2: conservative/moderate
+  allow_short: [true, false]
+
+# Symbols and timeframes
+symbols: [BTCUSDT]
+timeframes: [1h, 4h, 1d]        # 4 → 3: remove 15m
+
+# Price source for execution
+price_source: [next_open, close]
+
+# Filters for overfitting detection
+filters:
+  min_trades: 50
+  max_drawdown_pct: -30
+  min_profit_factor: 1.1
+  min_sharpe: 0.6
+  wfo_positive_ratio: 0.65
+  mc_percentile: 55

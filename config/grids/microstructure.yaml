@@ -1,0 +1,63 @@
+# Microstructure Strategy Family Grid (OPTIMIZED)
+# Reduced from 209,952 → ~12,000 configs (17x reduction)
+# Based on: VWAP, volume profile, order flow, volume-weighted momentum
+
+family: microstructure
+
+strategies:
+  vwap:
+    vwap_period: [24, 48]               # 3 → 2: intraday/daily
+    deviation_threshold: [0.01, 0.015]  # 3 → 2: moderate/wide
+    volume_mult: [1.2, 1.5]             # 3 → 2: moderate/high
+
+  volume_profile:
+    profile_period: [50, 100]           # 3 → 2: medium/long
+    num_bins: [20, 30]                  # 3 → 2: moderate/fine
+    poc_proximity: [0.005, 0.01]        # 3 → 2: tight/moderate
+
+  order_flow:
+    flow_period: [10, 15]               # 3 → 2: medium/long
+    imbalance_threshold: [0.6, 0.7]     # 3 → 2: moderate/strong
+    confirmation_period: [3, 5]         # 3 → 2: short/medium
+
+  volume_momentum:
+    momentum_period: [10, 15]           # 3 → 2: medium/long
+    volume_lookback: [20, 30]           # 3 → 2: medium/long
+    momentum_threshold: [0.005, 0.01]   # 3 → 2: moderate/strong
+    volume_mult: [1.5, 2.0]             # 3 → 2: moderate/high
+
+# Risk management
+risk:
+  stop_loss_pct: [0.015, 0.02]          # 3 → 2: tight for microstructure
+  take_profit_pct: [0.02, 0.025, 0.03]  # 4 → 3: keep range
+
+# Trading costs
+costs:
+  profiles:
+    conservative:
+      slippage_bps: 5
+      fee_taker_bps: 6
+    base:
+      slippage_bps: 3
+      fee_taker_bps: 4
+
+# Position settings
+position:
+  leverage: [1, 2]                      # 3 → 2: conservative/moderate
+  allow_short: [true, false]
+
+# Symbols and timeframes
+symbols: [BTCUSDT]
+timeframes: [1h, 4h]                    # 3 → 2: remove 15m (less reliable for microstructure)
+
+# Price source for execution
+price_source: [next_open, close]
+
+# Filters for overfitting detection
+filters:
+  min_trades: 40
+  max_drawdown_pct: -30
+  min_profit_factor: 1.1
+  min_sharpe: 0.5
+  wfo_positive_ratio: 0.6
+  mc_percentile: 55
