@@ -325,6 +325,22 @@ class BacktestEngine:
             return 1.0
         return min(max(value, 0.0), 2.0)
 
+    def _partial_exit_fraction(
+        self,
+        *,
+        strategy: Strategy,
+        bar: Bar,
+        strategy_position: StrategyPosition,
+    ) -> float:
+        partial_fn = getattr(strategy, "partial_exit_fraction", None)
+        if not callable(partial_fn):
+            return 0.0
+        try:
+            value = float(partial_fn(bar, strategy_position))
+        except Exception:
+            return 0.0
+        return min(max(value, 0.0), 1.0)
+
     def _maybe_store_order(self, order: Order, storage: SQLiteStorage | None) -> None:
         if storage is not None:
             storage.save_order(order)
@@ -402,9 +418,12 @@ class BacktestEngine:
         def current_equity(mark_price: float) -> float:
             return cash + position.unrealized_pnl(mark_price)
 
-        def close_position(row_index: int, reason_signal: str) -> None:
+        def close_position(row_index: int, reason_signal: str, *, close_fraction: float = 1.0) -> None:
             nonlocal cash, position
             if not position.is_open:
+                return
+            fraction = min(max(float(close_fraction), 0.0), 1.0)
+            if fraction <= 0.0:
                 return
 
             side: OrderSide = "SELL" if position.side == "long" else "BUY"
@@ -412,6 +431,8 @@ class BacktestEngine:
             exec_price = 0.0
             exec_ts = str(market.iloc[row_index]["timestamp"])
             fee_order_type: OrderType = config.order_type
+            close_qty = abs(position.qty) * fraction
+            signed_close_qty = close_qty if position.side == "long" else -close_qty
 
             if exit_order_type == "LIMIT":
                 filled, limit_price, limit_ts, timeout_idx = self._attempt_limit_fill(
@@ -433,7 +454,7 @@ class BacktestEngine:
                         position_side="LONG" if position.side == "long" else "SHORT",
                         reduce_only=True,
                         order_type="LIMIT",
-                        qty=abs(position.qty),
+                        qty=close_qty,
                         requested_price=limit_price,
                         stop_price=None,
                         time_in_force=None,
@@ -456,7 +477,7 @@ class BacktestEngine:
                         position_side="LONG" if position.side == "long" else "SHORT",
                         reduce_only=True,
                         order_type="LIMIT",
-                        qty=abs(position.qty),
+                        qty=close_qty,
                         requested_price=limit_price,
                         stop_price=None,
                         time_in_force=None,
@@ -484,7 +505,7 @@ class BacktestEngine:
                         position_side="LONG" if position.side == "long" else "SHORT",
                         reduce_only=True,
                         order_type="MARKET",
-                        qty=abs(position.qty),
+                        qty=close_qty,
                         requested_price=exec_price,
                         stop_price=None,
                         time_in_force=None,
@@ -514,7 +535,7 @@ class BacktestEngine:
                     position_side="LONG" if position.side == "long" else "SHORT",
                     reduce_only=True,
                     order_type=config.order_type,
-                    qty=abs(position.qty),
+                    qty=close_qty,
                     requested_price=exec_price,
                     stop_price=None,
                     time_in_force=None,
@@ -524,14 +545,14 @@ class BacktestEngine:
                 self._maybe_store_order(order, storage)
 
             fee_rate, liquidity = self._fee_rate(order_type=fee_order_type, config=config)
-            exit_fee = abs(position.qty * exec_price) * fee_rate
+            exit_fee = abs(signed_close_qty * exec_price) * fee_rate
             fill = Fill(
                 fill_id=next_fill_id(),
                 run_id=run_id,
                 order_id=orders[-1].order_id,
                 ts=exec_ts,
                 side=side,
-                qty=abs(position.qty),
+                qty=close_qty,
                 price=exec_price,
                 fee=exit_fee,
                 liquidity=liquidity,
@@ -539,16 +560,18 @@ class BacktestEngine:
             fills.append(fill)
             self._maybe_store_fill(fill, storage)
 
-            gross_pnl = position.qty * (exec_price - position.entry_price)
-            fee_paid = position.entry_fee + exit_fee
-            funding_paid = position.funding_paid
+            gross_pnl = signed_close_qty * (exec_price - position.entry_price)
+            allocated_entry_fee = position.entry_fee * fraction
+            allocated_funding = position.funding_paid * fraction
+            fee_paid = allocated_entry_fee + exit_fee
+            funding_paid = allocated_funding
             net_pnl = gross_pnl - fee_paid - funding_paid
-            notional_entry = abs(position.qty * position.entry_price)
+            notional_entry = abs(signed_close_qty * position.entry_price)
 
             cash += gross_pnl
             cash -= exit_fee
             if exit_order_type == "LIMIT" and fee_order_type == "MARKET":
-                timeout_penalty = abs(position.qty * exec_price) * max(float(config.limit_unfilled_penalty_bps), 0.0) / 10_000.0
+                timeout_penalty = abs(signed_close_qty * exec_price) * max(float(config.limit_unfilled_penalty_bps), 0.0) / 10_000.0
                 cash -= timeout_penalty
                 net_pnl -= timeout_penalty
                 fee_paid += timeout_penalty
@@ -561,7 +584,7 @@ class BacktestEngine:
                 side="long" if position.side == "long" else "short",
                 entry_ts=position.entry_ts,
                 exit_ts=exec_ts,
-                qty=abs(position.qty),
+                qty=close_qty,
                 entry_price=position.entry_price,
                 exit_price=exec_price,
                 gross_pnl=gross_pnl,
@@ -574,7 +597,13 @@ class BacktestEngine:
             trades.append(trade)
             self._maybe_store_trade(trade, storage)
 
-            position = Position(leverage=config.leverage)
+            remaining_fraction = max(1.0 - fraction, 0.0)
+            if remaining_fraction <= 1e-9:
+                position = Position(leverage=config.leverage)
+            else:
+                position.qty = position.qty * remaining_fraction
+                position.entry_fee = position.entry_fee * remaining_fraction
+                position.funding_paid = position.funding_paid * remaining_fraction
 
         def open_position(
             row_index: int,
@@ -729,6 +758,11 @@ class BacktestEngine:
                     bar=bar,
                     strategy_position=strategy_position,
                 )
+                partial_exit_fraction = self._partial_exit_fraction(
+                    strategy=strategy,
+                    bar=bar,
+                    strategy_position=strategy_position,
+                )
 
                 if signal == "exit":
                     close_position(idx, reason_signal="exit")
@@ -742,6 +776,12 @@ class BacktestEngine:
                             source_signal=signal,
                             size_multiplier=size_multiplier,
                         )
+                elif position.is_open and partial_exit_fraction > 0.0:
+                    close_position(
+                        idx,
+                        reason_signal=f"partial_{partial_exit_fraction:.2f}",
+                        close_fraction=partial_exit_fraction,
+                    )
 
                 if config.enable_funding and position.is_open and "funding_rate" in row.index:
                     funding_rate = row["funding_rate"]

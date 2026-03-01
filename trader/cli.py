@@ -25,7 +25,9 @@ from trader.notify import Notifier
 from trader.experiments.runner import (
     _parse_float_list,
     _parse_int_list,
+    default_system_candidates,
     run_edge_validation,
+    run_system_batch,
 )
 from trader.optimize import (
     Optimizer,
@@ -577,6 +579,68 @@ def experiments(
     table.add_row("regime_positive_ratio", f"{float(output.summary.get('regime_positive_ratio', 0.0)):.4f}")
     console.print(table)
     console.print(f"results_dir: {output.run_dir}")
+
+
+@app.command("system-batch")
+def system_batch(
+    symbols: str = typer.Option("BTC/USDT,ETH/USDT,SOL/USDT", help="Comma-separated symbols"),
+    timeframe: str = typer.Option("1h", help="Candle timeframe (use one consistently)"),
+    start: str = typer.Option("2021-01-01", help="Batch start date/time (UTC)"),
+    end: str = typer.Option("2026-01-01", help="Batch end date/time (UTC)"),
+    seed: int = typer.Option(42, help="Global seed"),
+    data_source: str = typer.Option("binance", help="binance | csv | synthetic"),
+    csv_path: str | None = typer.Option(None, help="CSV path when --data-source csv"),
+    output_dir: str = typer.Option("out/experiments", help="Batch output root"),
+) -> None:
+    setup_logging()
+    if data_source not in {"binance", "csv", "synthetic"}:
+        raise typer.BadParameter("--data-source must be one of: binance, csv, synthetic")
+
+    parsed_symbols = _parse_symbols(symbols)
+    cfg = AppConfig.from_env().model_copy(update={"timeframe": timeframe})
+    base_bt_cfg = replace(
+        _build_base_backtest_config(cfg),
+        persist_to_db=False,
+    )
+
+    output = run_system_batch(
+        symbols=parsed_symbols,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        base_config=base_bt_cfg,
+        output_root=Path(output_dir),
+        seed=seed,
+        data_source=data_source,  # type: ignore[arg-type]
+        csv_path=csv_path,
+        testnet=_is_testnet(cfg),
+        candidates=default_system_candidates(),
+        walk_train_days=240,
+        walk_test_days=60,
+        walk_step_days=30,
+        walk_top_pct=0.15,
+        walk_max_candidates=120,
+    )
+
+    table = Table(title="System Candidate Batch")
+    table.add_column("candidate")
+    table.add_column("verdict")
+    table.add_column("wfo>=0.60(2sym)")
+    table.add_column("cost_robust")
+    table.add_column("regime_pf_mdd")
+    table.add_column("trades>=200")
+    for row in output.candidate_results:
+        table.add_row(
+            str(row.get("candidate_id", "")),
+            str(row.get("verdict", "")),
+            str(row.get("gate_wfo_two_symbols", "")),
+            str(row.get("gate_cost_robust", "")),
+            str(row.get("gate_regime_consistency", "")),
+            str(row.get("gate_trade_count", "")),
+        )
+    console.print(table)
+    console.print(f"batch_run_id: {output.batch_run_id}")
+    console.print(f"batch_dir: {output.batch_dir}")
 
 
 @app.command()

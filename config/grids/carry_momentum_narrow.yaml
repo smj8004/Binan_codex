@@ -1,0 +1,7 @@
+momentum_fast: [8, 12]
+momentum_slow: [26, 34]
+carry_period: [16, 24]
+carry_weight: [0.25, 0.35]
+stop_loss_pct: [0.01]
+take_profit_pct: [0.03]
+risk_template: ["balanced"]

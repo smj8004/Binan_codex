@@ -1,0 +1,6 @@
+sma_period: [20, 30]
+atr_period: [10, 14]
+atr_mult: [1.6, 1.9]
+stop_loss_pct: [0.012, 0.016]
+take_profit_pct: [0.035, 0.05]
+risk_template: ["aggressive"]

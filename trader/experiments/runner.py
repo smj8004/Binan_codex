@@ -19,6 +19,7 @@ from trader.strategy.bollinger import BollingerBandStrategy
 from trader.strategy.ema_cross import EMACrossStrategy
 from trader.strategy.macd import MACDStrategy
 from trader.strategy.rsi import RSIStrategy
+from trader.strategy import STRATEGY_FACTORIES
 
 from .report import (
     save_bar_chart,
@@ -39,6 +40,200 @@ class EdgeRunOutput:
     run_dir: Path
     summary: dict[str, Any]
     files: dict[str, str]
+
+
+@dataclass(frozen=True)
+class RiskTemplateConfig:
+    name: str
+    trailing_stop_pct: float = 0.0
+    time_stop_bars: int = 0
+    partial_take_profit_pct: float = 0.0
+    partial_take_fraction: float = 0.0
+    vol_target_lookback: int = 60
+    vol_target_ratio: float = 0.7
+    min_size_mult: float = 0.3
+    max_size_mult: float = 1.2
+
+
+RISK_TEMPLATES: dict[str, RiskTemplateConfig] = {
+    "balanced": RiskTemplateConfig(
+        name="balanced",
+        trailing_stop_pct=0.012,
+        time_stop_bars=96,
+        partial_take_profit_pct=0.018,
+        partial_take_fraction=0.50,
+        vol_target_lookback=96,
+        vol_target_ratio=0.80,
+        min_size_mult=0.35,
+        max_size_mult=1.00,
+    ),
+    "defensive": RiskTemplateConfig(
+        name="defensive",
+        trailing_stop_pct=0.009,
+        time_stop_bars=72,
+        partial_take_profit_pct=0.014,
+        partial_take_fraction=0.40,
+        vol_target_lookback=120,
+        vol_target_ratio=0.65,
+        min_size_mult=0.25,
+        max_size_mult=0.90,
+    ),
+    "aggressive": RiskTemplateConfig(
+        name="aggressive",
+        trailing_stop_pct=0.018,
+        time_stop_bars=144,
+        partial_take_profit_pct=0.025,
+        partial_take_fraction=0.33,
+        vol_target_lookback=72,
+        vol_target_ratio=0.95,
+        min_size_mult=0.40,
+        max_size_mult=1.20,
+    ),
+}
+
+
+class RiskTemplateWrapper(Strategy):
+    def __init__(self, *, base: Strategy, template: RiskTemplateConfig):
+        self.base = base
+        self.template = template
+        self._bar_index = 0
+        self._entry_bar_index: int | None = None
+        self._high_watermark: float = 0.0
+        self._low_watermark: float = 0.0
+        self._partial_done = False
+        self._pending_partial_fraction = 0.0
+        self._returns: list[float] = []
+        self._prev_close: float | None = None
+
+    def _reset_trade_state(self) -> None:
+        self._entry_bar_index = None
+        self._high_watermark = 0.0
+        self._low_watermark = 0.0
+        self._partial_done = False
+        self._pending_partial_fraction = 0.0
+
+    def on_bar(self, bar: Bar, position: StrategyPosition | None = None) -> Literal["long", "short", "exit", "hold", "buy", "sell"]:
+        self._bar_index += 1
+        if self._prev_close is not None and self._prev_close > 0:
+            self._returns.append((bar.close - self._prev_close) / self._prev_close)
+            if len(self._returns) > 400:
+                self._returns.pop(0)
+        self._prev_close = bar.close
+
+        if position is None or position.side == "flat":
+            self._reset_trade_state()
+            return self.base.on_bar(bar, position)
+
+        if self._entry_bar_index is None:
+            self._entry_bar_index = self._bar_index
+            self._high_watermark = bar.close
+            self._low_watermark = bar.close
+            self._partial_done = False
+
+        self._high_watermark = max(self._high_watermark, bar.close)
+        self._low_watermark = min(self._low_watermark, bar.close)
+
+        if self.template.time_stop_bars > 0 and (self._bar_index - self._entry_bar_index) >= self.template.time_stop_bars:
+            return "exit"
+
+        if self.template.trailing_stop_pct > 0:
+            if position.side == "long":
+                trail_price = self._high_watermark * (1.0 - self.template.trailing_stop_pct)
+                if bar.close <= trail_price:
+                    return "exit"
+            elif position.side == "short":
+                trail_price = self._low_watermark * (1.0 + self.template.trailing_stop_pct)
+                if bar.close >= trail_price:
+                    return "exit"
+
+        if (
+            (not self._partial_done)
+            and self.template.partial_take_profit_pct > 0
+            and self.template.partial_take_fraction > 0
+            and position.entry_price > 0
+        ):
+            if position.side == "long":
+                pnl_pct = (bar.close - position.entry_price) / position.entry_price
+            else:
+                pnl_pct = (position.entry_price - bar.close) / position.entry_price
+            if pnl_pct >= self.template.partial_take_profit_pct:
+                self._partial_done = True
+                self._pending_partial_fraction = self.template.partial_take_fraction
+
+        return self.base.on_bar(bar, position)
+
+    def partial_exit_fraction(self, bar: Bar, position: StrategyPosition | None = None) -> float:
+        value = self._pending_partial_fraction
+        self._pending_partial_fraction = 0.0
+        return value
+
+    def size_multiplier(self, bar: Bar, position: StrategyPosition | None = None) -> float:
+        lookback = max(self.template.vol_target_lookback, 20)
+        if len(self._returns) < lookback:
+            return 1.0
+        recent = np.asarray(self._returns[-lookback:], dtype=float)
+        vol = float(np.std(recent))
+        if vol <= 1e-12:
+            return 1.0
+        scale = self.template.vol_target_ratio / vol
+        return min(max(scale, self.template.min_size_mult), self.template.max_size_mult)
+
+
+class RegimeSwitchStrategy(Strategy):
+    def __init__(
+        self,
+        *,
+        trend_strategy: Strategy,
+        range_strategy: Strategy,
+        trend_ema_span: int = 48,
+        slope_lookback: int = 8,
+        slope_threshold: float = 0.0015,
+        vol_lookback: int = 96,
+        high_vol_size_mult: float = 0.70,
+        low_vol_size_mult: float = 1.00,
+    ) -> None:
+        self.trend_strategy = trend_strategy
+        self.range_strategy = range_strategy
+        self.trend_ema_span = trend_ema_span
+        self.slope_lookback = slope_lookback
+        self.slope_threshold = slope_threshold
+        self.vol_lookback = vol_lookback
+        self.high_vol_size_mult = high_vol_size_mult
+        self.low_vol_size_mult = low_vol_size_mult
+        self._prices: list[float] = []
+        self._returns: list[float] = []
+        self._last_regime = "range|low_vol"
+
+    def _regime(self) -> str:
+        if len(self._prices) < max(self.trend_ema_span + self.slope_lookback + 2, self.vol_lookback + 2):
+            return "range|low_vol"
+        series = pd.Series(self._prices, dtype="float64")
+        ema = series.ewm(span=self.trend_ema_span, adjust=False).mean()
+        slope = (ema.iloc[-1] - ema.iloc[-1 - self.slope_lookback]) / max(abs(ema.iloc[-1 - self.slope_lookback]), 1e-9)
+        trend = "trend" if abs(float(slope)) >= self.slope_threshold else "range"
+        vol = float(np.std(np.asarray(self._returns[-self.vol_lookback :], dtype=float)))
+        vol_ref = float(np.std(np.asarray(self._returns[-(self.vol_lookback * 2) :], dtype=float))) if len(self._returns) >= self.vol_lookback * 2 else vol
+        vol_label = "high_vol" if vol_ref > 0 and vol >= vol_ref else "low_vol"
+        return f"{trend}|{vol_label}"
+
+    def on_bar(self, bar: Bar, position: StrategyPosition | None = None) -> Literal["long", "short", "exit", "hold", "buy", "sell"]:
+        if self._prices:
+            prev = self._prices[-1]
+            if prev > 0:
+                self._returns.append((bar.close - prev) / prev)
+                if len(self._returns) > 1000:
+                    self._returns.pop(0)
+        self._prices.append(bar.close)
+        regime = self._regime()
+        self._last_regime = regime
+        if regime.startswith("trend|"):
+            return self.trend_strategy.on_bar(bar, position)
+        return self.range_strategy.on_bar(bar, position)
+
+    def size_multiplier(self, bar: Bar, position: StrategyPosition | None = None) -> float:
+        if self._last_regime.endswith("high_vol"):
+            return self.high_vol_size_mult
+        return self.low_vol_size_mult
 
 
 def _timeframe_to_seconds(timeframe: str) -> int:
@@ -155,19 +350,47 @@ def _build_strategy(strategy_name: str, params: dict[str, Any]) -> Strategy:
     stop_loss_pct = float(params.get("stop_loss_pct", 0.0))
     take_profit_pct = float(params.get("take_profit_pct", 0.0))
     allow_short = bool(params.get("allow_short", True))
+    risk_template_name = str(params.get("risk_template", "") or "").strip().lower()
+
+    if strategy_name == "regime_switch":
+        trend_type = str(params.get("trend_strategy_type", "trend:donchian"))
+        range_type = str(params.get("range_strategy_type", "meanrev:zscore"))
+        trend_params = dict(params.get("trend_params", {}))
+        range_params = dict(params.get("range_params", {}))
+        trend_params.setdefault("allow_short", allow_short)
+        range_params.setdefault("allow_short", allow_short)
+        trend_params.setdefault("stop_loss_pct", stop_loss_pct)
+        trend_params.setdefault("take_profit_pct", take_profit_pct)
+        range_params.setdefault("stop_loss_pct", stop_loss_pct)
+        range_params.setdefault("take_profit_pct", take_profit_pct)
+        trend_strategy = _build_strategy(trend_type, trend_params)
+        range_strategy = _build_strategy(range_type, range_params)
+        base = RegimeSwitchStrategy(
+            trend_strategy=trend_strategy,
+            range_strategy=range_strategy,
+            trend_ema_span=int(params.get("trend_ema_span", 48)),
+            slope_lookback=int(params.get("trend_slope_lookback", 8)),
+            slope_threshold=float(params.get("trend_slope_threshold", 0.0015)),
+            vol_lookback=int(params.get("vol_lookback", 96)),
+            high_vol_size_mult=float(params.get("high_vol_size_mult", 0.7)),
+            low_vol_size_mult=float(params.get("low_vol_size_mult", 1.0)),
+        )
+        if risk_template_name in RISK_TEMPLATES:
+            return RiskTemplateWrapper(base=base, template=RISK_TEMPLATES[risk_template_name])
+        return base
 
     if strategy_name == "ema_cross":
         fast_len = int(params.get("fast_len", params.get("short_window", 12)))
         slow_len = int(params.get("slow_len", params.get("long_window", 26)))
-        return EMACrossStrategy(
+        base: Strategy = EMACrossStrategy(
             short_window=fast_len,
             long_window=slow_len,
             allow_short=allow_short,
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
         )
-    if strategy_name == "rsi":
-        return RSIStrategy(
+    elif strategy_name == "rsi":
+        base = RSIStrategy(
             period=int(params.get("period", 14)),
             overbought=float(params.get("overbought", 70.0)),
             oversold=float(params.get("oversold", 30.0)),
@@ -175,8 +398,8 @@ def _build_strategy(strategy_name: str, params: dict[str, Any]) -> Strategy:
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
         )
-    if strategy_name == "macd":
-        return MACDStrategy(
+    elif strategy_name == "macd":
+        base = MACDStrategy(
             fast_period=int(params.get("fast_period", 12)),
             slow_period=int(params.get("slow_period", 26)),
             signal_period=int(params.get("signal_period", 9)),
@@ -186,11 +409,11 @@ def _build_strategy(strategy_name: str, params: dict[str, Any]) -> Strategy:
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
         )
-    if strategy_name == "bollinger":
+    elif strategy_name == "bollinger":
         mode = str(params.get("mode", "mean_reversion"))
         if mode not in {"mean_reversion", "breakout"}:
             mode = "mean_reversion"
-        return BollingerBandStrategy(
+        base = BollingerBandStrategy(
             period=int(params.get("period", 20)),
             std_dev=float(params.get("std_dev", 2.0)),
             mode=mode,  # type: ignore[arg-type]
@@ -198,7 +421,26 @@ def _build_strategy(strategy_name: str, params: dict[str, Any]) -> Strategy:
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=take_profit_pct,
         )
-    raise ValueError(f"Unsupported strategy: {strategy_name}")
+    elif ":" in strategy_name:
+        family, variant = strategy_name.split(":", 1)
+        family = family.strip().lower()
+        variant = variant.strip()
+        factory = STRATEGY_FACTORIES.get(family)
+        if factory is None:
+            raise ValueError(f"Unsupported strategy family: {family}")
+        base = factory(
+            variant,
+            params,
+            allow_short=allow_short,
+            stop_loss_pct=stop_loss_pct,
+            take_profit_pct=take_profit_pct,
+        )
+    else:
+        raise ValueError(f"Unsupported strategy: {strategy_name}")
+
+    if risk_template_name in RISK_TEMPLATES:
+        return RiskTemplateWrapper(base=base, template=RISK_TEMPLATES[risk_template_name])
+    return base
 
 
 def _extract_metrics(result: BacktestResult, candles: pd.DataFrame) -> dict[str, float]:
@@ -901,11 +1143,15 @@ def run_edge_validation(
         "bars": float(len(candles)),
         "cost_positive_ratio": float(np.mean((cost_df["net_pnl"] > 0).astype(float))) if not cost_df.empty else 0.0,
         "cost_median_net_pnl": float(cost_df["net_pnl"].median()) if not cost_df.empty else 0.0,
+        "cost_median_trade_count": float(cost_df["trade_count"].median()) if not cost_df.empty else 0.0,
+        "cost_min_trade_count": float(cost_df["trade_count"].min()) if not cost_df.empty else 0.0,
         "wfo_oos_positive_ratio": float(wf_summary.get("oos_positive_ratio", 0.0)),
         "wfo_median_sharpe_like": float(wf_summary.get("oos_median_best_test_sharpe_like", 0.0)),
         "wfo_param_stability_score": float(wf_summary.get("param_stability_score", 0.0)),
         "regime_positive_ratio": float(np.mean((regime_df["net_pnl"] > 0).astype(float))) if not regime_df.empty else 0.0,
         "regime_best_net_pnl": float(regime_df["net_pnl"].max()) if not regime_df.empty else 0.0,
+        "regime_best_profit_factor": float(regime_table_df["profit_factor"].max()) if not regime_table_df.empty else 0.0,
+        "regime_best_max_drawdown": float(regime_table_df["max_drawdown"].max()) if not regime_table_df.empty else 0.0,
     }
     verdict, robustness = _verdict(summary)
     summary["robustness_score"] = robustness
@@ -998,8 +1244,358 @@ def run_edge_validation(
     return EdgeRunOutput(run_id=run_id, run_dir=run_dir, summary=summary_out, files=files)
 
 
+@dataclass(frozen=True)
+class SystemCandidate:
+    system_id: str
+    title: str
+    track: str
+    strategy_name: str
+    strategy_params: dict[str, Any]
+    walk_grid_path: str
+    notes: str
+
+
+@dataclass(frozen=True)
+class SystemBatchOutput:
+    batch_run_id: str
+    batch_dir: Path
+    candidate_results: list[dict[str, Any]]
+
+
+def default_system_candidates() -> list[SystemCandidate]:
+    return [
+        SystemCandidate(
+            system_id="A_beta_hedged_carry_momo",
+            title="Carry-Momentum + Beta Hedge",
+            track="A",
+            strategy_name="carry:momentum",
+            strategy_params={
+                "momentum_fast": 8,
+                "momentum_slow": 34,
+                "carry_period": 24,
+                "carry_weight": 0.35,
+                "allow_short": True,
+                "stop_loss_pct": 0.012,
+                "take_profit_pct": 0.03,
+                "risk_template": "balanced",
+            },
+            walk_grid_path="config/grids/carry_momentum_narrow.yaml",
+            notes="Track A: direction dependency 완화, BTC 베타 헷지 프록시 점검",
+        ),
+        SystemCandidate(
+            system_id="B_regime_switch_trend_range",
+            title="Regime Switch (Trend vs Range)",
+            track="B",
+            strategy_name="regime_switch",
+            strategy_params={
+                "trend_strategy_type": "trend:donchian",
+                "range_strategy_type": "meanrev:zscore",
+                "trend_params": {"entry_period": 20, "exit_period": 10, "allow_short": True},
+                "range_params": {"lookback": 24, "entry_zscore": 2.0, "exit_zscore": 0.5, "allow_short": True},
+                "trend_ema_span": 48,
+                "trend_slope_lookback": 8,
+                "trend_slope_threshold": 0.0015,
+                "vol_lookback": 96,
+                "high_vol_size_mult": 0.60,
+                "low_vol_size_mult": 1.00,
+                "stop_loss_pct": 0.010,
+                "take_profit_pct": 0.03,
+                "risk_template": "defensive",
+            },
+            walk_grid_path="config/grids/regime_switch_narrow.yaml",
+            notes="Track B: trend/range 분리 운용 + high-vol 사이징 축소",
+        ),
+        SystemCandidate(
+            system_id="C_breakout_atr_risk_template",
+            title="Breakout ATR + Execution Aware Risk",
+            track="C",
+            strategy_name="breakout:atr_channel",
+            strategy_params={
+                "sma_period": 30,
+                "atr_period": 14,
+                "atr_mult": 1.8,
+                "allow_short": True,
+                "stop_loss_pct": 0.013,
+                "take_profit_pct": 0.04,
+                "risk_template": "aggressive",
+            },
+            walk_grid_path="config/grids/breakout_atr_narrow.yaml",
+            notes="Track C: 고정 리스크 템플릿 + 지정가/시장가 혼합 비용 강건성 점검",
+        ),
+    ]
+
+
+def _safe_symbol(symbol: str) -> str:
+    return symbol.replace("/", "_").replace(":", "_")
+
+
+def _calc_beta_proxy(
+    *,
+    symbol: str,
+    timeframe: str,
+    start: str,
+    end: str,
+    seed: int,
+    data_source: DataSource,
+    csv_path: str | None,
+    testnet: bool,
+) -> float:
+    if symbol.upper() in {"BTC/USDT", "BTCUSDT"}:
+        return 1.0
+    sym_df = load_candles(
+        data_source=data_source,
+        symbol=symbol,
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        seed=seed,
+        csv_path=csv_path,
+        testnet=testnet,
+    )
+    btc_df = load_candles(
+        data_source=data_source,
+        symbol="BTC/USDT",
+        timeframe=timeframe,
+        start=start,
+        end=end,
+        seed=seed + 1,
+        csv_path=csv_path if (data_source == "csv" and symbol.upper() in {"BTC/USDT", "BTCUSDT"}) else None,
+        testnet=testnet,
+    )
+    if sym_df.empty or btc_df.empty:
+        return 1.0
+    merged = pd.merge(
+        sym_df[["timestamp", "close"]].rename(columns={"close": "sym"}),
+        btc_df[["timestamp", "close"]].rename(columns={"close": "btc"}),
+        on="timestamp",
+        how="inner",
+    )
+    if len(merged) < 50:
+        return 1.0
+    sym_ret = merged["sym"].pct_change().dropna()
+    btc_ret = merged["btc"].pct_change().dropna()
+    min_len = min(len(sym_ret), len(btc_ret))
+    if min_len < 20:
+        return 1.0
+    sym_ret = sym_ret.iloc[-min_len:]
+    btc_ret = btc_ret.iloc[-min_len:]
+    var = float(np.var(btc_ret))
+    if var <= 1e-12:
+        return 1.0
+    cov = float(np.cov(sym_ret, btc_ret)[0, 1])
+    beta = cov / var
+    return float(np.clip(beta, -3.0, 3.0))
+
+
+def _evaluate_candidate_gates(candidate_dir: Path, symbol_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    rows_df = pd.DataFrame(symbol_rows)
+    if rows_df.empty:
+        return {
+            "verdict": "불합격",
+            "gate_wfo_two_symbols": False,
+            "gate_cost_robust": False,
+            "gate_regime_consistency": False,
+            "gate_trade_count": False,
+            "reason": "no symbol results",
+        }
+
+    target = rows_df[rows_df["symbol"].isin(["BTC/USDT", "ETH/USDT"])].copy()
+    wfo_pass_count = int((target["wfo_oos_positive_ratio"] >= 0.60).sum())
+    gate_wfo = wfo_pass_count >= 2
+
+    gate_cost = bool((rows_df["cost_collapse_score"] <= 2.5).all() and (rows_df["cost_positive_ratio"] >= 0.30).all())
+    gate_regime = bool(rows_df["regime_pf_mdd_flag"].all())
+    gate_trade = bool((rows_df["cost_median_trade_count"] >= 200).all())
+
+    if gate_wfo and gate_cost and gate_regime and gate_trade:
+        verdict = "합격"
+    elif (gate_wfo and gate_regime) or (gate_cost and gate_trade):
+        verdict = "불확실"
+    else:
+        verdict = "불합격"
+
+    return {
+        "verdict": verdict,
+        "gate_wfo_two_symbols": gate_wfo,
+        "gate_cost_robust": gate_cost,
+        "gate_regime_consistency": gate_regime,
+        "gate_trade_count": gate_trade,
+        "wfo_pass_symbol_count": wfo_pass_count,
+    }
+
+
+def run_system_batch(
+    *,
+    symbols: list[str],
+    timeframe: str,
+    start: str,
+    end: str,
+    base_config: BacktestConfig,
+    output_root: Path,
+    seed: int,
+    data_source: DataSource,
+    csv_path: str | None,
+    testnet: bool,
+    candidates: list[SystemCandidate] | None = None,
+    walk_train_days: int = 240,
+    walk_test_days: int = 60,
+    walk_step_days: int = 30,
+    walk_top_pct: float = 0.15,
+    walk_max_candidates: int = 120,
+    fee_multipliers: list[float] | None = None,
+    fixed_slippage_bps: list[float] | None = None,
+    atr_slippage_mults: list[float] | None = None,
+    latency_bars: list[int] | None = None,
+) -> SystemBatchOutput:
+    systems = candidates or default_system_candidates()
+    batch_run_id = f"systems_{pd.Timestamp.now(tz='UTC').strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+    batch_dir = output_root / batch_run_id
+    batch_dir.mkdir(parents=True, exist_ok=True)
+    fee_list = fee_multipliers or [1.0, 1.5, 2.0, 3.0]
+    slip_bps_list = fixed_slippage_bps or [1.0, 3.0, 5.0, 10.0]
+    slip_atr_list = atr_slippage_mults or [0.02, 0.05, 0.10, 0.20]
+    lat_list = latency_bars or [0, 1, 3]
+
+    candidate_outputs: list[dict[str, Any]] = []
+
+    for ci, candidate in enumerate(systems):
+        candidate_dir = batch_dir / candidate.system_id
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        symbol_rows: list[dict[str, Any]] = []
+
+        for si, symbol in enumerate(symbols):
+            sym_out_root = candidate_dir / "symbols" / _safe_symbol(symbol)
+            out = run_edge_validation(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                strategy_name=candidate.strategy_name,
+                strategy_params=candidate.strategy_params,
+                base_config=base_config,
+                output_root=sym_out_root,
+                seed=seed + (ci * 1000) + (si * 31),
+                data_source=data_source,
+                csv_path=csv_path,
+                testnet=testnet,
+                suite="all",
+                fee_multipliers=fee_list,
+                fixed_slippage_bps=slip_bps_list,
+                atr_slippage_mults=slip_atr_list,
+                slippage_mode="mixed",
+                latency_bars=lat_list,
+                order_models=["market", "limit"],
+                limit_timeout_bars=2,
+                limit_fill_probability=0.9,
+                limit_unfilled_penalty_bps=3.0,
+                walk_train_days=walk_train_days,
+                walk_test_days=walk_test_days,
+                walk_step_days=walk_step_days,
+                walk_top_pct=walk_top_pct,
+                walk_max_candidates=walk_max_candidates,
+                walk_metric="sharpe_like",
+                walk_grid_path=candidate.walk_grid_path,
+                trend_ema_span=48,
+                trend_slope_lookback=8,
+                trend_slope_threshold=0.0015,
+                regime_atr_period=14,
+                regime_vol_lookback=120,
+                regime_vol_percentile=0.65,
+            )
+
+            cost_df = pd.read_csv(out.files["cost_csv"])
+            regime_df = pd.read_csv(out.files["regime_csv"])
+            cost_median = float(cost_df["net_pnl"].median()) if not cost_df.empty else 0.0
+            cost_min = float(cost_df["net_pnl"].min()) if not cost_df.empty else 0.0
+            collapse_score = (cost_median - cost_min) / (abs(cost_median) + 1e-9) if cost_median != 0 else float("inf")
+
+            regime_pf_mdd_flag = False
+            if not regime_df.empty:
+                pf_cond = regime_df["profit_factor"] > 1.1
+                mdd_cond = regime_df["max_drawdown"] > regime_df["max_drawdown"].median()
+                regime_pf_mdd_flag = bool((pf_cond & mdd_cond).any())
+
+            beta = _calc_beta_proxy(
+                symbol=symbol,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                seed=seed + si,
+                data_source=data_source,
+                csv_path=csv_path,
+                testnet=testnet,
+            )
+
+            symbol_rows.append(
+                {
+                    "symbol": symbol,
+                    "edge_run_id": out.run_id,
+                    "edge_run_dir": str(out.run_dir),
+                    "wfo_oos_positive_ratio": float(out.summary.get("wfo_oos_positive_ratio", 0.0)),
+                    "cost_positive_ratio": float(out.summary.get("cost_positive_ratio", 0.0)),
+                    "cost_median_trade_count": float(out.summary.get("cost_median_trade_count", 0.0)),
+                    "regime_best_profit_factor": float(out.summary.get("regime_best_profit_factor", 0.0)),
+                    "regime_best_max_drawdown": float(out.summary.get("regime_best_max_drawdown", 0.0)),
+                    "cost_collapse_score": float(collapse_score),
+                    "regime_pf_mdd_flag": regime_pf_mdd_flag,
+                    "beta_proxy": beta,
+                }
+            )
+
+        gates = _evaluate_candidate_gates(candidate_dir, symbol_rows)
+        symbol_df = pd.DataFrame(symbol_rows)
+        save_dataframe_csv(symbol_df, candidate_dir / "candidate_symbol_summary.csv")
+        summary_payload = {
+            "candidate_id": candidate.system_id,
+            "title": candidate.title,
+            "track": candidate.track,
+            "notes": candidate.notes,
+            **gates,
+        }
+        save_json(summary_payload, candidate_dir / "candidate_summary.json")
+        save_dataframe_csv(
+            pd.DataFrame({"metric": list(summary_payload.keys()), "value": list(summary_payload.values())}),
+            candidate_dir / "candidate_summary.csv",
+        )
+        report_lines = [
+            f"# Candidate Report: {candidate.system_id}",
+            "",
+            f"- title: {candidate.title}",
+            f"- track: {candidate.track}",
+            f"- verdict: **{gates['verdict']}**",
+            f"- gate_wfo_two_symbols: {gates['gate_wfo_two_symbols']}",
+            f"- gate_cost_robust: {gates['gate_cost_robust']}",
+            f"- gate_regime_consistency: {gates['gate_regime_consistency']}",
+            f"- gate_trade_count: {gates['gate_trade_count']}",
+            "",
+            "## Symbol Summary",
+            ("```csv\n" + symbol_df.to_csv(index=False) + "```") if not symbol_df.empty else "_(no rows)_",
+        ]
+        (candidate_dir / "report.md").write_text("\n".join(report_lines), encoding="utf-8")
+
+        candidate_outputs.append(
+            {
+                "candidate_id": candidate.system_id,
+                "candidate_dir": str(candidate_dir),
+                "verdict": gates["verdict"],
+                "gate_wfo_two_symbols": bool(gates["gate_wfo_two_symbols"]),
+                "gate_cost_robust": bool(gates["gate_cost_robust"]),
+                "gate_regime_consistency": bool(gates["gate_regime_consistency"]),
+                "gate_trade_count": bool(gates["gate_trade_count"]),
+            }
+        )
+
+    save_dataframe_csv(pd.DataFrame(candidate_outputs), batch_dir / "batch_summary.csv")
+    save_json({"batch_run_id": batch_run_id, "candidates": candidate_outputs}, batch_dir / "batch_summary.json")
+    return SystemBatchOutput(batch_run_id=batch_run_id, batch_dir=batch_dir, candidate_results=candidate_outputs)
+
+
 __all__ = [
     "EdgeRunOutput",
+    "SystemCandidate",
+    "SystemBatchOutput",
+    "run_system_batch",
+    "default_system_candidates",
     "run_edge_validation",
     "load_candles",
     "run_cost_stress",

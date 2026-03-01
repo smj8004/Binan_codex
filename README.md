@@ -173,6 +173,26 @@ Core interpretation:
 - `UNCERTAIN`: mixed out-of-sample stability, requires narrower hypothesis and re-test
 - `HAS EDGE`: out-of-sample consistency + cost robustness + regime selectivity are all positive
 
+## Candidate Systems Batch (Track A/B/C)
+
+Run 3 system candidates with hard-gate evaluation:
+
+```bash
+uv run trader system-batch \
+  --symbols BTC/USDT,ETH/USDT,SOL/USDT \
+  --timeframe 1h \
+  --start 2021-01-01 --end 2026-01-01 \
+  --seed 42
+```
+
+Output:
+- `out/experiments/<batch_run_id>/batch_summary.csv`
+- `out/experiments/<batch_run_id>/<candidate_id>/report.md`
+- candidate별 `symbols/<symbol>/<run_id>/` 하위에 `report.md`, `summary.csv/json`, `plots/*` 생성
+
+Candidate definitions:
+- [guide/SYSTEM_CANDIDATES.md](/mnt/c/Users/smjan/Desktop/code/Binance_codex/guide/SYSTEM_CANDIDATES.md)
+
 ## Live Runtime (Safety First)
 
 Live mode requires explicit flag:

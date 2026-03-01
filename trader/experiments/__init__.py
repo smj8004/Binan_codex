@@ -17,7 +17,14 @@ from trader.experiments.cost_stress import CostStressExperiment
 from trader.experiments.walk_forward import WalkForwardExperiment
 from trader.experiments.regime_gate import RegimeGateExperiment
 from trader.experiments.report import ExperimentReporter
-from trader.experiments.runner import EdgeRunOutput, run_edge_validation
+from trader.experiments.runner import (
+    EdgeRunOutput,
+    SystemBatchOutput,
+    SystemCandidate,
+    default_system_candidates,
+    run_edge_validation,
+    run_system_batch,
+)
 
 __all__ = [
     "ExperimentConfig",
@@ -29,5 +36,9 @@ __all__ = [
     "RegimeGateExperiment",
     "ExperimentReporter",
     "EdgeRunOutput",
+    "SystemCandidate",
+    "SystemBatchOutput",
+    "default_system_candidates",
     "run_edge_validation",
+    "run_system_batch",
 ]

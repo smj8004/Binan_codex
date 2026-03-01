@@ -1,0 +1,7 @@
+trend_ema_span: [36, 48]
+trend_slope_lookback: [6, 8]
+trend_slope_threshold: [0.0012, 0.0018]
+high_vol_size_mult: [0.55, 0.70]
+stop_loss_pct: [0.01]
+take_profit_pct: [0.03]
+risk_template: ["defensive"]
