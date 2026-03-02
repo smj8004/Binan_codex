@@ -188,6 +188,7 @@ uv run trader experiments \
   --k 3,4 \
   --gross 1.0,1.5 \
   --signal-models momentum,mean_reversion \
+  --rank-buffer 0,1 \
   --walk-train-days 240 --walk-test-days 60 --walk-step-days 30 \
   --walk-top-pct 0.15 --walk-max-candidates 120 \
   --fee-multipliers 1.0,1.5,2.0,3.0 \
@@ -197,11 +198,16 @@ uv run trader experiments \
   --atr-slippage-mults 0.05 \
   --order-models market,limit \
   --high-vol-gross-mult 0.5 \
+  --turnover-threshold-low-vol 0.05 \
+  --turnover-threshold-high-vol 0.20 \
+  --debug-mode \
   --seed 42
 ```
 
 Portfolio outputs are saved under `out/experiments/<portfolio_run_id>/`:
 - `report.md`, `summary.csv`, `summary.json`
+- `diagnostics.json` (rebalance_attempts/execs, skip reasons, safety events)
+- `debug_dump.json` (equity crash/anomaly 직전 이벤트)
 - `portfolio_equity_curve.csv`
 - `portfolio_positions.csv` (timestamp/symbol weights and holdings)
 - `turnover.csv`
@@ -210,6 +216,12 @@ Portfolio outputs are saved under `out/experiments/<portfolio_run_id>/`:
 - `walk_forward_windows.csv`, `walk_forward_candidates.csv`
 - `regime_scenarios.csv`, `regime_table.csv`
 - `plots/*.png`
+
+Metric definitions:
+- `rebalance_attempt_count`: warmup 이후 스케줄상 리밸런스 "검토" 횟수
+- `rebalance_exec_count`: 실제 주문/포지션 변경이 발생한 횟수
+- `avg_turnover_ratio`: executions 기준 평균 turnover
+- `avg_turnover_ratio_attempts`: attempts 기준 평균 turnover
 
 ## Candidate Systems Batch (Track A/B/C)
 

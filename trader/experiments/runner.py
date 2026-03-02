@@ -60,6 +60,7 @@ class PortfolioParams:
     gross_exposure: float
     turnover_threshold: float
     vol_lookback: int
+    rank_buffer: int = 0
 
 
 @dataclass(frozen=True)
@@ -102,6 +103,8 @@ class PortfolioSimResult:
     positions: pd.DataFrame
     turnover: pd.DataFrame
     cost_breakdown: pd.DataFrame
+    diagnostics: dict[str, Any]
+    debug_dump: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -834,36 +837,78 @@ def _portfolio_signal_scores(
 def _portfolio_target_weights(
     *,
     close: np.ndarray,
+    open_: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
     idx: int,
     lookback_bars: int,
     vol_lookback: int,
     k: int,
+    rank_buffer: int,
+    prev_long_idx: set[int] | None,
+    prev_short_idx: set[int] | None,
     gross_exposure: float,
     signal_model: Literal["momentum", "mean_reversion"],
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     symbol_count = close.shape[1]
     weights = np.zeros(symbol_count, dtype=float)
     if idx <= lookback_bars or symbol_count < max(k * 2, 2):
-        return weights
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "warmup"
     lb = max(int(lookback_bars), 1)
     vol_lb = max(int(vol_lookback), 5)
     if idx < max(lb, vol_lb):
-        return weights
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "warmup"
 
     score_window = close[idx - lb : idx + 1]
     if score_window.shape[0] < lb + 1:
-        return weights
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "insufficient_score_window"
+    valid_price = np.all(
+        np.isfinite(open_[idx - lb : idx + 1])
+        & np.isfinite(high[idx - lb : idx + 1])
+        & np.isfinite(low[idx - lb : idx + 1])
+        & np.isfinite(close[idx - lb : idx + 1]),
+        axis=0,
+    ) & (np.min(open_[idx - lb : idx + 1], axis=0) > 1e-9) & (np.min(close[idx - lb : idx + 1], axis=0) > 1e-9)
     scores = _portfolio_signal_scores(score_window, signal_model=signal_model)
-    valid = np.isfinite(scores)
+    valid = np.isfinite(scores) & valid_price
     if int(valid.sum()) < max(k * 2, 2):
-        return weights
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "insufficient_valid_symbols"
 
     valid_idx = np.where(valid)[0]
     ordered = valid_idx[np.argsort(scores[valid_idx])]
-    short_idx = ordered[:k]
-    long_idx = ordered[-k:]
-    if len(set(long_idx).intersection(set(short_idx))) > 0:
-        return weights
+    short_idx = ordered[:k].astype(int)
+    long_idx = ordered[-k:].astype(int)
+    if len(set(long_idx.tolist()).intersection(set(short_idx.tolist()))) > 0:
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "long_short_overlap"
+    if rank_buffer > 0 and len(ordered) >= max((k + rank_buffer) * 2, 2):
+        long_pool = ordered[-(k + rank_buffer) :].astype(int)
+        short_pool = ordered[: (k + rank_buffer)].astype(int)
+        long_selected: list[int] = []
+        short_selected: list[int] = []
+        prev_long = prev_long_idx or set()
+        prev_short = prev_short_idx or set()
+        for x in long_pool:
+            if int(x) in prev_long and int(x) not in long_selected:
+                long_selected.append(int(x))
+        for x in reversed(long_pool.tolist()):
+            if len(long_selected) >= k:
+                break
+            if int(x) not in long_selected:
+                long_selected.append(int(x))
+        for x in short_pool:
+            if int(x) in prev_short and int(x) not in short_selected:
+                short_selected.append(int(x))
+        for x in short_pool.tolist():
+            if len(short_selected) >= k:
+                break
+            if int(x) not in short_selected:
+                short_selected.append(int(x))
+        long_idx = np.asarray(long_selected[:k], dtype=int)
+        short_idx = np.asarray(short_selected[:k], dtype=int)
+        if len(long_idx) < k or len(short_idx) < k:
+            return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "hysteresis_select_failed"
+        if len(set(long_idx.tolist()).intersection(set(short_idx.tolist()))) > 0:
+            return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "hysteresis_overlap"
 
     price_now = close[idx - vol_lb + 1 : idx + 1]
     price_prev = np.maximum(close[idx - vol_lb : idx], 1e-12)
@@ -874,16 +919,16 @@ def _portfolio_target_weights(
     long_inv = 1.0 / vol[long_idx]
     short_inv = 1.0 / vol[short_idx]
     if np.any(~np.isfinite(long_inv)) or np.any(~np.isfinite(short_inv)):
-        return weights
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "invalid_vol"
     long_sum = float(np.sum(long_inv))
     short_sum = float(np.sum(short_inv))
     if long_sum <= 0 or short_sum <= 0:
-        return weights
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "invalid_vol_sum"
 
     half_gross = max(float(gross_exposure), 0.0) * 0.5
     weights[long_idx] = half_gross * (long_inv / long_sum)
     weights[short_idx] = -half_gross * (short_inv / short_sum)
-    return weights
+    return weights, long_idx.astype(int), short_idx.astype(int), "ok"
 
 
 def _portfolio_interval_metrics(interval_pnls: list[float]) -> tuple[float, float]:
@@ -908,6 +953,11 @@ def _simulate_portfolio(
     regime_mode: Literal["none", "on_off", "sizing"] = "none",
     allowed_regimes: set[str] | None = None,
     regime_size_map: dict[str, float] | None = None,
+    regime_turnover_threshold_map: dict[str, float] | None = None,
+    debug_mode: bool = False,
+    max_cost_ratio_per_bar: float = 0.05,
+    max_notional_to_equity_mult: float = 3.0,
+    stop_on_anomaly: bool = False,
 ) -> PortfolioSimResult:
     if market.bars <= 2:
         raise ValueError("insufficient bars for portfolio simulation")
@@ -930,39 +980,31 @@ def _simulate_portfolio(
     trade_count = 0
     fill_count = 0
     reject_count = 0
+    skipped_trade_count = 0
     cost_fee_total = 0.0
     cost_slippage_total = 0.0
     cost_penalty_total = 0.0
+    rebalance_attempts = 0
+    rebalance_execs = 0
+    skip_reasons: dict[str, int] = {}
+    debug_events: list[dict[str, Any]] = []
 
     rng = random.Random(int(seed))
     warmup = max(params.lookback_bars, params.vol_lookback + 1)
     rebalance_idxs = _portfolio_rebalance_indices(n, params.rebalance_bars, warmup)
-    rebalance_set = set(rebalance_idxs)
 
     prev_rebalance_equity: float | None = None
     last_weights = np.zeros(s, dtype=float)
+    prev_long_idx: set[int] = set()
+    prev_short_idx: set[int] = set()
     for idx in rebalance_idxs:
+        rebalance_attempts += 1
         mark_prices = close[idx]
         equity = float(cash + np.dot(qty, mark_prices))
         if not math.isfinite(equity):
             equity = 0.0
             qty[:] = 0.0
             cash = 0.0
-        if equity <= 0.0:
-            qty[:] = 0.0
-            cash = 0.0
-            equity_points.append(
-                {
-                    "timestamp": str(timestamps[idx]),
-                    "equity": 0.0,
-                    "cash": 0.0,
-                    "gross_exposure": 0.0,
-                    "net_exposure": 0.0,
-                    "rebalance_applied": False,
-                    "regime": regime_by_ts.get(_ts_key(timestamps[idx]), "all") if regime_by_ts else "all",
-                }
-            )
-            break
         if prev_rebalance_equity is not None:
             interval_pnls.append(equity - prev_rebalance_equity)
         prev_rebalance_equity = equity
@@ -976,44 +1018,72 @@ def _simulate_portfolio(
                 regime_scale = 0.0
         elif regime_mode == "sizing":
             regime_scale = float((regime_size_map or {}).get(regime_label, 1.0))
+        turnover_threshold = float((regime_turnover_threshold_map or {}).get(regime_label, params.turnover_threshold))
 
-        target_weights = _portfolio_target_weights(
+        target_weights, long_idx, short_idx, target_status = _portfolio_target_weights(
             close=close,
+            open_=open_,
+            high=high,
+            low=low,
             idx=idx,
             lookback_bars=params.lookback_bars,
             vol_lookback=params.vol_lookback,
             k=params.k,
+            rank_buffer=params.rank_buffer,
+            prev_long_idx=prev_long_idx,
+            prev_short_idx=prev_short_idx,
             gross_exposure=params.gross_exposure * regime_scale,
             signal_model=params.signal_model,
         )
+        if target_status != "ok":
+            skip_reasons[target_status] = int(skip_reasons.get(target_status, 0)) + 1
+            if target_status in {"warmup", "insufficient_valid_symbols"}:
+                target_weights = np.zeros(s, dtype=float)
 
         current_weights = np.zeros(s, dtype=float)
         equity_abs = max(abs(equity), 1e-9)
         current_weights = (qty * mark_prices) / equity_abs
         turnover_ratio = float(np.sum(np.abs(target_weights - current_weights)))
-        rebalance_applied = turnover_ratio >= max(float(params.turnover_threshold), 0.0)
+        rebalance_applied = turnover_ratio >= max(turnover_threshold, 0.0)
         if not rebalance_applied:
             target_weights = current_weights.copy()
+            skip_reasons["turnover_below_threshold"] = int(skip_reasons.get("turnover_below_threshold", 0)) + 1
 
         exec_idx = min(idx + 1 + max(int(cost_cfg.latency_bars), 0), n - 1)
         delta_qty = np.zeros(s, dtype=float)
         tradable_equity = max(equity, 0.0)
-        if tradable_equity > 1e-9:
+        if tradable_equity > 1e-9 and regime_scale > 0.0:
             target_notional = target_weights * tradable_equity
-            base_exec_price = np.maximum(open_[exec_idx], 1e-12)
+            base_exec_price = np.asarray(open_[exec_idx], dtype=float)
+            invalid_px = (~np.isfinite(base_exec_price)) | (base_exec_price <= 1e-9)
+            if np.any(invalid_px):
+                target_notional[invalid_px] = 0.0
+                skip_reasons["invalid_exec_price"] = int(skip_reasons.get("invalid_exec_price", 0)) + int(np.sum(invalid_px))
+            base_exec_price = np.where(invalid_px, 1.0, base_exec_price)
             target_qty = target_notional / base_exec_price
             delta_qty = target_qty - qty
+            est_turnover_notional = float(np.sum(np.abs(delta_qty * base_exec_price)))
+            turnover_cap = max(max_notional_to_equity_mult, 1.0) * tradable_equity
+            if est_turnover_notional > max(turnover_cap, 1e-9):
+                scale = turnover_cap / max(est_turnover_notional, 1e-9)
+                delta_qty = delta_qty * max(scale, 0.0)
+                skip_reasons["turnover_cap_scaled"] = int(skip_reasons.get("turnover_cap_scaled", 0)) + 1
         else:
             delta_qty = -qty
+            if tradable_equity <= 1e-9:
+                skip_reasons["equity_zero_or_negative"] = int(skip_reasons.get("equity_zero_or_negative", 0)) + 1
 
         scenario_fee = 0.0
         scenario_slip = 0.0
         scenario_penalty = 0.0
         turnover_notional = 0.0
+        trades_this_bar = 0
+        bar_blocked = False
+        bar_cost_budget = max(max_cost_ratio_per_bar, 0.0) * max(tradable_equity, 0.0)
 
         for sym_i in range(s):
             dqty = float(delta_qty[sym_i])
-            if abs(dqty) <= 1e-9:
+            if (not math.isfinite(dqty)) or abs(dqty) <= 1e-9:
                 continue
             side_buy = dqty > 0
             side_sign = 1.0 if side_buy else -1.0
@@ -1024,6 +1094,10 @@ def _simulate_portfolio(
             slippage_cost = 0.0
             abs_qty = abs(dqty)
             base_price = float(open_[exec_idx, sym_i])
+            if (not math.isfinite(base_price)) or base_price <= 1e-9:
+                skip_reasons["invalid_base_price"] = int(skip_reasons.get("invalid_base_price", 0)) + 1
+                skipped_trade_count += 1
+                continue
             atr_value = float(atr[exec_idx, sym_i])
             slippage_frac = _portfolio_slippage_fraction(
                 base_price=base_price,
@@ -1074,8 +1148,23 @@ def _simulate_portfolio(
                 slippage_cost = abs_qty * abs(fill_price - base_price)
                 fill_count += 1
 
+            if (not math.isfinite(fill_price)) or fill_price <= 1e-9:
+                skip_reasons["invalid_fill_price"] = int(skip_reasons.get("invalid_fill_price", 0)) + 1
+                skipped_trade_count += 1
+                continue
+
             notional = abs_qty * fill_price
+            if (not math.isfinite(notional)) or notional <= 0.0:
+                skip_reasons["invalid_notional"] = int(skip_reasons.get("invalid_notional", 0)) + 1
+                skipped_trade_count += 1
+                continue
             fee = notional * fee_rate
+            est_cost = fee + slippage_cost + penalty
+            if bar_cost_budget > 0 and (scenario_fee + scenario_slip + scenario_penalty + est_cost) > bar_cost_budget:
+                skip_reasons["bar_cost_budget_block"] = int(skip_reasons.get("bar_cost_budget_block", 0)) + 1
+                skipped_trade_count += 1
+                bar_blocked = True
+                continue
             turnover_notional += notional
 
             if side_buy:
@@ -1084,25 +1173,57 @@ def _simulate_portfolio(
                 cash += notional - fee - penalty
             qty[sym_i] += dqty
             trade_count += 1
+            trades_this_bar += 1
 
             scenario_fee += fee
             scenario_slip += slippage_cost
             scenario_penalty += penalty
+
+        if bar_blocked:
+            skip_reasons["bar_blocked"] = int(skip_reasons.get("bar_blocked", 0)) + 1
 
         cost_fee_total += scenario_fee
         cost_slippage_total += scenario_slip
         cost_penalty_total += scenario_penalty
 
         post_equity = float(cash + np.dot(qty, close[idx]))
-        liquidated = False
+        anomaly_reason = None
         if post_equity <= 0.0 or not math.isfinite(post_equity):
             post_equity = 0.0
             qty[:] = 0.0
             cash = 0.0
-            liquidated = True
+            anomaly_reason = "equity_liquidated"
+        if turnover_notional > max(max_notional_to_equity_mult, 1.0) * max(tradable_equity, 1.0) * 5.0:
+            anomaly_reason = anomaly_reason or "turnover_notional_anomaly"
+        if (scenario_fee + scenario_slip + scenario_penalty) > max(bar_cost_budget, 1.0) * 3.0 and tradable_equity > 0:
+            anomaly_reason = anomaly_reason or "cost_spike_anomaly"
+
+        if anomaly_reason is not None:
+            event = {
+                "timestamp": str(timestamps[idx]),
+                "reason": anomaly_reason,
+                "equity_before": equity,
+                "equity_after": post_equity,
+                "tradable_equity": tradable_equity,
+                "turnover_notional": turnover_notional,
+                "bar_cost": scenario_fee + scenario_slip + scenario_penalty,
+                "regime": regime_label,
+                "rebalance_applied": bool(rebalance_applied),
+                "trades_this_bar": trades_this_bar,
+            }
+            debug_events.append(event)
+            if len(debug_events) > 3:
+                debug_events = debug_events[-3:]
+            if stop_on_anomaly and debug_mode:
+                raise RuntimeError(f"portfolio debug anomaly: {event}")
+
         post_equity_abs = max(abs(post_equity), 1e-9)
         current_weights_post = (qty * close[idx]) / post_equity_abs if math.isfinite(post_equity_abs) else np.zeros(s, dtype=float)
         last_weights = current_weights_post.copy()
+        if trades_this_bar > 0:
+            rebalance_execs += 1
+            prev_long_idx = set(int(x) for x in long_idx.tolist())
+            prev_short_idx = set(int(x) for x in short_idx.tolist())
         equity_points.append(
             {
                 "timestamp": str(timestamps[idx]),
@@ -1110,7 +1231,7 @@ def _simulate_portfolio(
                 "cash": cash,
                 "gross_exposure": float(np.sum(np.abs(current_weights_post))),
                 "net_exposure": float(np.sum(current_weights_post)),
-                "rebalance_applied": bool(rebalance_applied),
+                "rebalance_applied": bool(trades_this_bar > 0),
                 "regime": regime_label,
             }
         )
@@ -1119,8 +1240,11 @@ def _simulate_portfolio(
                 "timestamp": str(timestamps[idx]),
                 "turnover_ratio": turnover_ratio,
                 "turnover_notional": turnover_notional,
-                "rebalance_applied": bool(rebalance_applied),
+                "rebalance_applied": bool(trades_this_bar > 0),
                 "regime": regime_label,
+                "skip_reason": anomaly_reason or ("executed" if trades_this_bar > 0 else "no_execution"),
+                "turnover_threshold_used": turnover_threshold,
+                "trades_this_bar": trades_this_bar,
             }
         )
         cost_rows.append(
@@ -1131,6 +1255,8 @@ def _simulate_portfolio(
                 "penalty_cost": scenario_penalty,
                 "total_cost": scenario_fee + scenario_slip + scenario_penalty,
                 "turnover_notional": turnover_notional,
+                "trades_this_bar": trades_this_bar,
+                "cost_budget": bar_cost_budget,
             }
         )
         for sym_i, symbol in enumerate(market.symbols):
@@ -1145,8 +1271,6 @@ def _simulate_portfolio(
                     "regime": regime_label,
                 }
             )
-        if liquidated:
-            break
 
     final_equity = float(cash + np.dot(qty, close[-1]))
     final_equity = max(final_equity, 0.0)
@@ -1186,7 +1310,9 @@ def _simulate_portfolio(
     sharpe_like = float(np.mean(rets) / max(float(np.std(rets)), 1e-9)) if rets.size else 0.0
     interval_pnls = [x for x in interval_pnls if math.isfinite(x)]
     win_rate, profit_factor = _portfolio_interval_metrics(interval_pnls)
-    rebalance_count = int(turnover_df["rebalance_applied"].sum()) if not turnover_df.empty else 0
+    avg_turn_attempt = float(turnover_df["turnover_ratio"].mean()) if not turnover_df.empty else 0.0
+    exec_turn_df = turnover_df[turnover_df["rebalance_applied"] == True] if not turnover_df.empty else pd.DataFrame()
+    avg_turn_exec = float(exec_turn_df["turnover_ratio"].mean()) if not exec_turn_df.empty else 0.0
 
     metrics: dict[str, float] = {
         "final_equity": final_equity,
@@ -1198,14 +1324,29 @@ def _simulate_portfolio(
         "avg_trade": (net_pnl / trade_count) if trade_count > 0 else 0.0,
         "trade_count": float(trade_count),
         "sharpe_like": sharpe_like,
-        "rebalance_count": float(rebalance_count),
-        "avg_turnover_ratio": float(turnover_df["turnover_ratio"].mean()) if not turnover_df.empty else 0.0,
+        "rebalance_count": float(rebalance_attempts),
+        "rebalance_attempt_count": float(rebalance_attempts),
+        "rebalance_exec_count": float(rebalance_execs),
+        "avg_turnover_ratio": avg_turn_exec,
+        "avg_turnover_ratio_attempts": avg_turn_attempt,
         "fill_rate": float(fill_count / max(fill_count + reject_count, 1)),
         "reject_rate": float(reject_count / max(fill_count + reject_count, 1)),
+        "skipped_trade_count": float(skipped_trade_count),
         "cost_fee_total": cost_fee_total,
         "cost_slippage_total": cost_slippage_total,
         "cost_penalty_total": cost_penalty_total,
         "cost_total": cost_fee_total + cost_slippage_total + cost_penalty_total,
+    }
+    diagnostics = {
+        "total_bars": int(n),
+        "warmup_bars": int(warmup),
+        "rebalance_step_bars": int(params.rebalance_bars),
+        "rebalance_attempts": int(rebalance_attempts),
+        "rebalance_execs": int(rebalance_execs),
+        "skip_reasons": {k: int(v) for k, v in sorted(skip_reasons.items())},
+        "anomaly_events": int(len(debug_events)),
+        "max_cost_ratio_per_bar": float(max_cost_ratio_per_bar),
+        "max_notional_to_equity_mult": float(max_notional_to_equity_mult),
     }
     return PortfolioSimResult(
         metrics=metrics,
@@ -1213,6 +1354,8 @@ def _simulate_portfolio(
         positions=pos_df,
         turnover=turnover_df,
         cost_breakdown=cost_df,
+        diagnostics=diagnostics,
+        debug_dump=debug_events,
     )
 
 
@@ -1689,6 +1832,7 @@ def _portfolio_params_to_dict(params: PortfolioParams) -> dict[str, Any]:
         "gross_exposure": float(params.gross_exposure),
         "turnover_threshold": float(params.turnover_threshold),
         "vol_lookback": int(params.vol_lookback),
+        "rank_buffer": int(params.rank_buffer),
     }
 
 
@@ -1704,6 +1848,7 @@ def _portfolio_params_from_dict(payload: dict[str, Any]) -> PortfolioParams:
         gross_exposure=max(float(payload.get("gross_exposure", 1.0)), 0.0),
         turnover_threshold=max(float(payload.get("turnover_threshold", 0.0)), 0.0),
         vol_lookback=max(int(payload.get("vol_lookback", 96)), 5),
+        rank_buffer=max(int(payload.get("rank_buffer", 0)), 0),
     )
 
 
@@ -1716,13 +1861,14 @@ def _build_portfolio_param_grid(
     gross_values: list[float],
     turnover_threshold: float,
     vol_lookback: int,
+    rank_buffers: list[int],
 ) -> list[PortfolioParams]:
     grid: list[PortfolioParams] = []
     for model in signal_models:
         norm_model = model.strip().lower()
         if norm_model not in {"momentum", "mean_reversion"}:
             continue
-        for lb, rb, k, gross in itertools.product(lookback_bars, rebalance_bars, k_values, gross_values):
+        for lb, rb, k, gross, rank_buffer in itertools.product(lookback_bars, rebalance_bars, k_values, gross_values, rank_buffers):
             grid.append(
                 PortfolioParams(
                     signal_model=norm_model,  # type: ignore[arg-type]
@@ -1732,6 +1878,7 @@ def _build_portfolio_param_grid(
                     gross_exposure=max(float(gross), 0.0),
                     turnover_threshold=max(float(turnover_threshold), 0.0),
                     vol_lookback=max(int(vol_lookback), 5),
+                    rank_buffer=max(int(rank_buffer), 0),
                 )
             )
     uniq: dict[str, PortfolioParams] = {}
@@ -1758,6 +1905,10 @@ def run_portfolio_walk_forward(
     end: str,
     regime_by_ts: dict[str, str],
     regime_size_map: dict[str, float],
+    regime_turnover_threshold_map: dict[str, float] | None = None,
+    debug_mode: bool = False,
+    max_cost_ratio_per_bar: float = 0.05,
+    max_notional_to_equity_mult: float = 3.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
     if not param_grid:
         return pd.DataFrame(), pd.DataFrame(), {"oos_positive_ratio": 0.0, "param_stability_score": 0.0}
@@ -1793,6 +1944,10 @@ def run_portfolio_walk_forward(
                     regime_by_ts=regime_by_ts,
                     regime_mode="sizing",
                     regime_size_map=regime_size_map,
+                    regime_turnover_threshold_map=regime_turnover_threshold_map,
+                    debug_mode=debug_mode,
+                    max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+                    max_notional_to_equity_mult=max_notional_to_equity_mult,
                 )
             except Exception:
                 continue
@@ -1833,6 +1988,10 @@ def run_portfolio_walk_forward(
                     regime_by_ts=regime_by_ts,
                     regime_mode="sizing",
                     regime_size_map=regime_size_map,
+                    regime_turnover_threshold_map=regime_turnover_threshold_map,
+                    debug_mode=debug_mode,
+                    max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+                    max_notional_to_equity_mult=max_notional_to_equity_mult,
                 )
             except Exception:
                 continue
@@ -1916,6 +2075,10 @@ def run_portfolio_cost_stress(
     seed: int,
     regime_by_ts: dict[str, str],
     regime_size_map: dict[str, float],
+    regime_turnover_threshold_map: dict[str, float] | None = None,
+    debug_mode: bool = False,
+    max_cost_ratio_per_bar: float = 0.05,
+    max_notional_to_equity_mult: float = 3.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows: list[dict[str, Any]] = []
     scenario_idx = 0
@@ -1951,6 +2114,10 @@ def run_portfolio_cost_stress(
                         regime_by_ts=regime_by_ts,
                         regime_mode="sizing",
                         regime_size_map=regime_size_map,
+                        regime_turnover_threshold_map=regime_turnover_threshold_map,
+                        debug_mode=debug_mode,
+                        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+                        max_notional_to_equity_mult=max_notional_to_equity_mult,
                     )
                     rows.append(
                         {
@@ -1986,6 +2153,10 @@ def run_portfolio_regime_gating(
     seed: int,
     regime_by_ts: dict[str, str],
     high_vol_gross_mult: float,
+    regime_turnover_threshold_map: dict[str, float] | None = None,
+    debug_mode: bool = False,
+    max_cost_ratio_per_bar: float = 0.05,
+    max_notional_to_equity_mult: float = 3.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     regime_names = sorted(set(regime_by_ts.values()))
     scenarios: list[tuple[str, Literal["none", "on_off", "sizing"], set[str], dict[str, float]]] = []
@@ -2019,6 +2190,10 @@ def run_portfolio_regime_gating(
             regime_mode=mode,
             allowed_regimes=allowed,
             regime_size_map=size_map,
+            regime_turnover_threshold_map=regime_turnover_threshold_map,
+            debug_mode=debug_mode,
+            max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+            max_notional_to_equity_mult=max_notional_to_equity_mult,
         )
         m = sim.metrics
         rows.append(
@@ -2070,6 +2245,7 @@ def _portfolio_report(
     run_id: str,
     config_dump: dict[str, Any],
     summary: dict[str, Any],
+    diagnostics: dict[str, Any],
     cost_df: pd.DataFrame,
     wf_df: pd.DataFrame,
     regime_table_df: pd.DataFrame,
@@ -2090,6 +2266,8 @@ def _portfolio_report(
         f"- mdd_compare_to_btc: `{float(summary.get('portfolio_max_drawdown', 0.0)):.4f}` vs `{float(summary.get('btc_long_max_drawdown', 0.0)):.4f}`"
     )
     lines.append(f"- rebalance_count: `{int(float(summary.get('rebalance_count', 0.0)))}` (gate >= 200)")
+    lines.append(f"- rebalance_attempts: `{int(float(summary.get('rebalance_attempt_count', 0.0)))}`")
+    lines.append(f"- rebalance_execs: `{int(float(summary.get('rebalance_exec_count', 0.0)))}`")
     lines.append("")
     lines.append("## Interpretation")
     if float(summary.get("cost_positive_ratio", 0.0)) < 0.30:
@@ -2113,6 +2291,19 @@ def _portfolio_report(
             lines.append(f"- {k}: `{v:.6f}`")
         else:
             lines.append(f"- {k}: `{v}`")
+    lines.append("")
+    lines.append("## Rebalance Diagnostics")
+    lines.append(f"- attempts: `{diagnostics.get('rebalance_attempts', 0)}`")
+    lines.append(f"- executions: `{diagnostics.get('rebalance_execs', 0)}`")
+    lines.append(f"- warmup_bars: `{diagnostics.get('warmup_bars', 0)}`")
+    lines.append(f"- step_bars: `{diagnostics.get('rebalance_step_bars', 0)}`")
+    skip_reasons = diagnostics.get("skip_reasons", {})
+    if isinstance(skip_reasons, dict) and skip_reasons:
+        lines.append("- skip_reasons:")
+        for k, v in sorted(skip_reasons.items()):
+            lines.append(f"  - {k}: {v}")
+    else:
+        lines.append("- skip_reasons: _(none)_")
     lines.append("")
     lines.append("## Config")
     lines.append("```json")
@@ -2148,7 +2339,10 @@ def run_portfolio_validation(
     rebalance_bars: list[int],
     k_values: list[int],
     gross_values: list[float],
+    rank_buffers: list[int],
     turnover_threshold: float,
+    turnover_threshold_high_vol: float | None,
+    turnover_threshold_low_vol: float | None,
     vol_lookback: int,
     fee_multipliers: list[float],
     fixed_slippage_bps: list[float],
@@ -2172,6 +2366,10 @@ def run_portfolio_validation(
     regime_vol_lookback: int,
     regime_vol_percentile: float,
     high_vol_gross_mult: float,
+    debug_mode: bool,
+    max_cost_ratio_per_bar: float,
+    max_notional_to_equity_mult: float,
+    stop_on_anomaly: bool,
 ) -> PortfolioRunOutput:
     run_id = f"portfolio_{pd.Timestamp.now(tz='UTC').strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     run_dir = output_root / run_id
@@ -2218,6 +2416,14 @@ def run_portfolio_validation(
         "range|low_vol": 1.0,
         "range|high_vol": float(high_vol_gross_mult),
     }
+    low_thr = float(turnover_threshold if turnover_threshold_low_vol is None else turnover_threshold_low_vol)
+    high_thr = float(turnover_threshold if turnover_threshold_high_vol is None else turnover_threshold_high_vol)
+    regime_turnover_threshold_map = {
+        "trend|low_vol": low_thr,
+        "range|low_vol": low_thr,
+        "trend|high_vol": high_thr,
+        "range|high_vol": high_thr,
+    }
 
     param_grid = _build_portfolio_param_grid(
         signal_models=signal_models,
@@ -2227,6 +2433,7 @@ def run_portfolio_validation(
         gross_values=gross_values,
         turnover_threshold=turnover_threshold,
         vol_lookback=vol_lookback,
+        rank_buffers=rank_buffers,
     )
     if not param_grid:
         raise ValueError("portfolio parameter grid is empty")
@@ -2261,6 +2468,10 @@ def run_portfolio_validation(
         end=end,
         regime_by_ts=regime_by_ts,
         regime_size_map=regime_size_map,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
     )
     selected_params = _select_portfolio_params(wf_df=wf_df, fallback=param_grid[0])
 
@@ -2273,6 +2484,11 @@ def run_portfolio_validation(
         regime_by_ts=regime_by_ts,
         regime_mode="sizing",
         regime_size_map=regime_size_map,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
+        stop_on_anomaly=stop_on_anomaly,
     )
     cost_df, cost_sens_df = run_portfolio_cost_stress(
         market=market,
@@ -2290,6 +2506,10 @@ def run_portfolio_validation(
         seed=seed,
         regime_by_ts=regime_by_ts,
         regime_size_map=regime_size_map,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
     )
     regime_df, regime_table_df = run_portfolio_regime_gating(
         market=market,
@@ -2299,6 +2519,10 @@ def run_portfolio_validation(
         seed=seed,
         regime_by_ts=regime_by_ts,
         high_vol_gross_mult=high_vol_gross_mult,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
     )
 
     bench_df = _portfolio_btc_benchmark(market=market, initial_equity=float(base_config.initial_equity))
@@ -2318,6 +2542,7 @@ def run_portfolio_validation(
         "lookback_bars": float(selected_params.lookback_bars),
         "rebalance_bars": float(selected_params.rebalance_bars),
         "k": float(selected_params.k),
+        "rank_buffer": float(selected_params.rank_buffer),
         "gross_exposure": float(selected_params.gross_exposure),
         "turnover_threshold": float(selected_params.turnover_threshold),
         "net_pnl": float(baseline_metrics.get("net_pnl", 0.0)),
@@ -2328,7 +2553,10 @@ def run_portfolio_validation(
         "avg_trade": float(baseline_metrics.get("avg_trade", 0.0)),
         "trade_count": float(baseline_metrics.get("trade_count", 0.0)),
         "rebalance_count": float(baseline_metrics.get("rebalance_count", 0.0)),
+        "rebalance_attempt_count": float(baseline_metrics.get("rebalance_attempt_count", 0.0)),
+        "rebalance_exec_count": float(baseline_metrics.get("rebalance_exec_count", 0.0)),
         "avg_turnover_ratio": float(baseline_metrics.get("avg_turnover_ratio", 0.0)),
+        "avg_turnover_ratio_attempts": float(baseline_metrics.get("avg_turnover_ratio_attempts", 0.0)),
         "oos_positive_ratio": float(wf_summary.get("oos_positive_ratio", 0.0)),
         "wfo_param_stability_score": float(wf_summary.get("param_stability_score", 0.0)),
         "cost_positive_ratio": float(np.mean((cost_df["net_pnl"] > 0).astype(float))) if not cost_df.empty else 0.0,
@@ -2339,6 +2567,7 @@ def run_portfolio_validation(
         "regime_pf_mdd_flag": regime_pf_mdd_flag,
         "btc_long_max_drawdown": btc_mdd,
         "mdd_better_or_equal_btc": bool(portfolio_mdd >= btc_mdd),
+        "skip_reasons_json": json.dumps(baseline_sim.diagnostics.get("skip_reasons", {}), sort_keys=True),
     }
     summary["gate_wfo"] = bool(float(summary["oos_positive_ratio"]) >= 0.60)
     summary["gate_cost"] = bool(float(summary["cost_positive_ratio"]) >= 0.30)
@@ -2359,6 +2588,13 @@ def run_portfolio_validation(
         "generated_at": pd.Timestamp.now(tz=timezone.utc).isoformat(),
         "selected_params": _portfolio_params_to_dict(selected_params),
         "grid": [_portfolio_params_to_dict(p) for p in param_grid],
+        "safety": {
+            "debug_mode": debug_mode,
+            "max_cost_ratio_per_bar": max_cost_ratio_per_bar,
+            "max_notional_to_equity_mult": max_notional_to_equity_mult,
+            "stop_on_anomaly": stop_on_anomaly,
+            "regime_turnover_threshold_map": regime_turnover_threshold_map,
+        },
         "cost": {
             "fee_multipliers": fee_multipliers,
             "fixed_slippage_bps": fixed_slippage_bps,
@@ -2391,6 +2627,8 @@ def run_portfolio_validation(
 
     save_json(config_dump, run_dir / "config.json")
     save_json(summary, run_dir / "summary.json")
+    save_json(baseline_sim.diagnostics, run_dir / "diagnostics.json")
+    save_json({"events": baseline_sim.debug_dump}, run_dir / "debug_dump.json")
     save_dataframe_csv(pd.DataFrame({"metric": list(summary.keys()), "value": list(summary.values())}), run_dir / "summary.csv")
     save_dataframe_csv(baseline_sim.equity_curve, run_dir / "portfolio_equity_curve.csv")
     save_dataframe_csv(baseline_sim.positions, run_dir / "portfolio_positions.csv")
@@ -2418,6 +2656,7 @@ def run_portfolio_validation(
         run_id=run_id,
         config_dump=config_dump,
         summary=summary,
+        diagnostics=baseline_sim.diagnostics,
         cost_df=cost_df,
         wf_df=wf_df,
         regime_table_df=regime_table_df,
@@ -2427,6 +2666,8 @@ def run_portfolio_validation(
         "config_json": str(run_dir / "config.json"),
         "summary_csv": str(run_dir / "summary.csv"),
         "summary_json": str(run_dir / "summary.json"),
+        "diagnostics_json": str(run_dir / "diagnostics.json"),
+        "debug_dump_json": str(run_dir / "debug_dump.json"),
         "report_md": str(run_dir / "report.md"),
         "portfolio_equity_curve_csv": str(run_dir / "portfolio_equity_curve.csv"),
         "portfolio_positions_csv": str(run_dir / "portfolio_positions.csv"),

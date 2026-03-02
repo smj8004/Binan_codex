@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from trader.backtest.engine import BacktestConfig
 from trader.experiments.runner import run_portfolio_validation
@@ -28,7 +29,10 @@ def test_portfolio_suite_smoke(tmp_path: Path) -> None:
         rebalance_bars=[4],
         k_values=[1, 2],
         gross_values=[1.0],
+        rank_buffers=[0],
         turnover_threshold=0.05,
+        turnover_threshold_high_vol=0.10,
+        turnover_threshold_low_vol=0.05,
         vol_lookback=48,
         fee_multipliers=[1.0],
         fixed_slippage_bps=[3.0],
@@ -52,6 +56,10 @@ def test_portfolio_suite_smoke(tmp_path: Path) -> None:
         regime_vol_lookback=48,
         regime_vol_percentile=0.65,
         high_vol_gross_mult=0.5,
+        debug_mode=True,
+        max_cost_ratio_per_bar=0.10,
+        max_notional_to_equity_mult=3.0,
+        stop_on_anomaly=False,
     )
 
     assert output.run_dir.exists()
@@ -62,5 +70,10 @@ def test_portfolio_suite_smoke(tmp_path: Path) -> None:
     assert (output.run_dir / "portfolio_positions.csv").exists()
     assert (output.run_dir / "turnover.csv").exists()
     assert (output.run_dir / "cost_breakdown.csv").exists()
+    assert (output.run_dir / "diagnostics.json").exists()
+    assert (output.run_dir / "debug_dump.json").exists()
     assert (output.run_dir / "report.md").exists()
     assert (output.run_dir / "plots" / "portfolio_equity_curve.png").stat().st_size > 100
+    summary = json.loads((output.run_dir / "summary.json").read_text(encoding="utf-8"))
+    # 2 months, 1h bars, 4h rebalance -> attempts should be comfortably above 100.
+    assert float(summary.get("rebalance_attempt_count", 0.0)) >= 100.0
