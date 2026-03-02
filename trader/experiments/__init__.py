@@ -19,10 +19,12 @@ from trader.experiments.regime_gate import RegimeGateExperiment
 from trader.experiments.report import ExperimentReporter
 from trader.experiments.runner import (
     EdgeRunOutput,
+    PortfolioRunOutput,
     SystemBatchOutput,
     SystemCandidate,
     default_system_candidates,
     run_edge_validation,
+    run_portfolio_validation,
     run_system_batch,
 )
 
@@ -36,9 +38,11 @@ __all__ = [
     "RegimeGateExperiment",
     "ExperimentReporter",
     "EdgeRunOutput",
+    "PortfolioRunOutput",
     "SystemCandidate",
     "SystemBatchOutput",
     "default_system_candidates",
     "run_edge_validation",
+    "run_portfolio_validation",
     "run_system_batch",
 ]

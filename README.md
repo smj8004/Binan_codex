@@ -173,6 +173,44 @@ Core interpretation:
 - `UNCERTAIN`: mixed out-of-sample stability, requires narrower hypothesis and re-test
 - `HAS EDGE`: out-of-sample consistency + cost robustness + regime selectivity are all positive
 
+## Portfolio Cross-Section Suite (Dollar-neutral Long/Short)
+
+Run multi-symbol cross-sectional portfolio validation:
+
+```bash
+uv run trader experiments \
+  --suite portfolio \
+  --symbols BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,LINK/USDT,TRX/USDT \
+  --timeframe 1h \
+  --start 2021-01-01 --end 2026-01-01 \
+  --lookbacks 7d,14d,28d \
+  --rebalance 4h,1d \
+  --k 3,4 \
+  --gross 1.0,1.5 \
+  --signal-models momentum,mean_reversion \
+  --walk-train-days 240 --walk-test-days 60 --walk-step-days 30 \
+  --walk-top-pct 0.15 --walk-max-candidates 120 \
+  --fee-multipliers 1.0,1.5,2.0,3.0 \
+  --latency-bars 0,1,3 \
+  --slippage-mode mixed \
+  --fixed-slippage-bps 3 \
+  --atr-slippage-mults 0.05 \
+  --order-models market,limit \
+  --high-vol-gross-mult 0.5 \
+  --seed 42
+```
+
+Portfolio outputs are saved under `out/experiments/<portfolio_run_id>/`:
+- `report.md`, `summary.csv`, `summary.json`
+- `portfolio_equity_curve.csv`
+- `portfolio_positions.csv` (timestamp/symbol weights and holdings)
+- `turnover.csv`
+- `cost_breakdown.csv`
+- `cost_stress.csv`, `cost_sensitivity.csv`
+- `walk_forward_windows.csv`, `walk_forward_candidates.csv`
+- `regime_scenarios.csv`, `regime_table.csv`
+- `plots/*.png`
+
 ## Candidate Systems Batch (Track A/B/C)
 
 Run 3 system candidates with hard-gate evaluation:

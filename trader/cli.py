@@ -23,10 +23,12 @@ from trader.data.binance_live import BinanceLiveFeed
 from trader.logger_utils import setup_logging
 from trader.notify import Notifier
 from trader.experiments.runner import (
+    _parse_duration_list,
     _parse_float_list,
     _parse_int_list,
     default_system_candidates,
     run_edge_validation,
+    run_portfolio_validation,
     run_system_batch,
 )
 from trader.optimize import (
@@ -460,8 +462,12 @@ def optimize(
 
 @app.command("experiments")
 def experiments(
-    suite: str = typer.Option("all", help="all | cost | walk | regime"),
+    suite: str = typer.Option("all", help="all | cost | walk | regime | portfolio"),
     symbol: str = typer.Option("BTC/USDT", help="Market symbol"),
+    symbols: str = typer.Option(
+        "BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT,XRP/USDT,ADA/USDT,DOGE/USDT,AVAX/USDT,LINK/USDT,TRX/USDT",
+        help="Comma-separated symbols for portfolio suite",
+    ),
     timeframe: str = typer.Option("15m", help="Candle timeframe"),
     start: str = typer.Option(..., help="Start timestamp/date (UTC), e.g. 2023-01-01"),
     end: str = typer.Option(..., help="End timestamp/date (UTC), e.g. 2025-01-01"),
@@ -488,6 +494,14 @@ def experiments(
     walk_step_days: int = typer.Option(60, min=1, help="Walk-forward step days"),
     walk_top_pct: float = typer.Option(0.2, min=0.01, max=1.0, help="Top percentile for parameter cluster"),
     walk_max_candidates: int = typer.Option(100, min=1, help="Max parameter candidates per train window"),
+    lookbacks: str = typer.Option("7d,14d,28d", help="Portfolio lookback list (e.g. 7d,14d,28d)"),
+    rebalance: str = typer.Option("4h,1d", help="Portfolio rebalance list (e.g. 4h,1d)"),
+    k: str = typer.Option("3,4", help="Portfolio long/short count list"),
+    gross: str = typer.Option("1.0,1.5", help="Portfolio gross exposure cap list"),
+    signal_models: str = typer.Option("momentum,mean_reversion", help="Portfolio signals: momentum,mean_reversion"),
+    turnover_threshold: float = typer.Option(0.08, min=0.0, max=2.0, help="Minimum turnover ratio to rebalance"),
+    vol_lookback: int = typer.Option(96, min=5, help="Portfolio volatility lookback in bars"),
+    high_vol_gross_mult: float = typer.Option(0.5, min=0.0, max=1.0, help="Regime sizing multiplier in high vol"),
     trend_ema_span: int = typer.Option(48, min=2, help="Regime trend EMA span"),
     trend_slope_lookback: int = typer.Option(8, min=1, help="Regime trend slope lookback"),
     trend_slope_threshold: float = typer.Option(0.0015, min=0.0, help="Trend/range slope threshold"),
@@ -496,18 +510,85 @@ def experiments(
     regime_vol_percentile: float = typer.Option(0.65, min=0.1, max=0.95, help="High vol percentile threshold"),
 ) -> None:
     setup_logging()
-    if suite not in {"all", "cost", "walk", "regime"}:
-        raise typer.BadParameter("--suite must be one of: all, cost, walk, regime")
+    if suite not in {"all", "cost", "walk", "regime", "portfolio"}:
+        raise typer.BadParameter("--suite must be one of: all, cost, walk, regime, portfolio")
     if data_source not in {"binance", "csv", "synthetic"}:
         raise typer.BadParameter("--data-source must be one of: binance, csv, synthetic")
     if slippage_mode not in {"fixed", "atr", "mixed"}:
         raise typer.BadParameter("--slippage-mode must be one of: fixed, atr, mixed")
-    if strategy not in AVAILABLE_STRATEGIES:
-        raise typer.BadParameter(f"Unknown strategy: {strategy}. Available: {', '.join(AVAILABLE_STRATEGIES)}")
 
     parsed_order_models: list[str] = [x.strip().lower() for x in order_models.split(",") if x.strip()]
     if not parsed_order_models or any(x not in {"market", "limit"} for x in parsed_order_models):
         raise typer.BadParameter("--order-models must contain only market/limit")
+
+    if suite == "portfolio":
+        parsed_symbols = _parse_symbols(symbols)
+        parsed_signal_models = [x.strip().lower() for x in signal_models.split(",") if x.strip()]
+        if not parsed_signal_models:
+            raise typer.BadParameter("--signal-models must include at least one of momentum,mean_reversion")
+        for model in parsed_signal_models:
+            if model not in {"momentum", "mean_reversion"}:
+                raise typer.BadParameter("--signal-models supports only momentum,mean_reversion")
+
+        cfg = AppConfig.from_env().model_copy(update={"symbol": parsed_symbols[0], "timeframe": timeframe})
+        base_bt_cfg = replace(_build_base_backtest_config(cfg), persist_to_db=False)
+        output = run_portfolio_validation(
+            symbols=parsed_symbols,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            base_config=base_bt_cfg,
+            output_root=Path(output_dir),
+            seed=seed,
+            data_source=data_source,  # type: ignore[arg-type]
+            csv_path=csv_path,
+            testnet=_is_testnet(cfg),
+            signal_models=parsed_signal_models,
+            lookback_bars=_parse_duration_list(lookbacks, timeframe=timeframe),
+            rebalance_bars=_parse_duration_list(rebalance, timeframe=timeframe),
+            k_values=_parse_int_list(k),
+            gross_values=_parse_float_list(gross),
+            turnover_threshold=turnover_threshold,
+            vol_lookback=vol_lookback,
+            fee_multipliers=_parse_float_list(fee_multipliers),
+            fixed_slippage_bps=_parse_float_list(fixed_slippage_bps),
+            atr_slippage_mults=_parse_float_list(atr_slippage_mults),
+            slippage_mode=slippage_mode,  # type: ignore[arg-type]
+            latency_bars=_parse_int_list(latency_bars),
+            order_models=parsed_order_models,  # type: ignore[arg-type]
+            limit_timeout_bars=limit_timeout_bars,
+            limit_fill_probability=limit_fill_probability,
+            limit_unfilled_penalty_bps=limit_unfilled_penalty_bps,
+            walk_train_days=walk_train_days,
+            walk_test_days=walk_test_days,
+            walk_step_days=walk_step_days,
+            walk_top_pct=walk_top_pct,
+            walk_max_candidates=walk_max_candidates,
+            walk_metric=walk_metric,
+            trend_ema_span=trend_ema_span,
+            trend_slope_lookback=trend_slope_lookback,
+            trend_slope_threshold=trend_slope_threshold,
+            regime_atr_period=regime_atr_period,
+            regime_vol_lookback=regime_vol_lookback,
+            regime_vol_percentile=regime_vol_percentile,
+            high_vol_gross_mult=high_vol_gross_mult,
+        )
+        table = Table(title="Portfolio Experiment Summary")
+        table.add_column("metric")
+        table.add_column("value", justify="right")
+        table.add_row("run_id", output.run_id)
+        table.add_row("verdict", str(output.summary.get("verdict", "UNKNOWN")))
+        table.add_row("oos_positive_ratio", f"{float(output.summary.get('oos_positive_ratio', 0.0)):.4f}")
+        table.add_row("cost_positive_ratio", f"{float(output.summary.get('cost_positive_ratio', 0.0)):.4f}")
+        table.add_row("portfolio_mdd", f"{float(output.summary.get('portfolio_max_drawdown', 0.0)):.4f}")
+        table.add_row("btc_long_mdd", f"{float(output.summary.get('btc_long_max_drawdown', 0.0)):.4f}")
+        table.add_row("rebalance_count", f"{int(float(output.summary.get('rebalance_count', 0.0)))}")
+        console.print(table)
+        console.print(f"results_dir: {output.run_dir}")
+        return
+
+    if strategy not in AVAILABLE_STRATEGIES:
+        raise typer.BadParameter(f"Unknown strategy: {strategy}. Available: {', '.join(AVAILABLE_STRATEGIES)}")
 
     cfg = AppConfig.from_env().model_copy(update={"symbol": symbol, "timeframe": timeframe})
     storage = SQLiteStorage(cfg.db_path)
