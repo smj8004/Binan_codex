@@ -1,0 +1,11 @@
+# Portfolio regime exposure sweep (narrow, robust-first)
+signal_model: [momentum]
+lookback_bars: [168, 336, 672]
+rebalance_bars: [24]
+k: [3, 4]
+gross_exposure: [1.0]
+rank_buffer: [0, 1]
+high_vol_percentile: [0.75, 0.85, 0.90, 0.95]
+gross_map: [highvol_050, balanced, conservative, off_range_highvol, ultra_defensive, off_highvol_all]
+off_grace_bars: [0, 24, 48]
+phased_entry_steps: [1, 2]

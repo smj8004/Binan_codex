@@ -120,6 +120,41 @@ def save_line_chart(path: Path, values: list[float], color: Color = (37, 99, 235
     _write_png(path, img)
 
 
+def save_dual_line_chart(
+    path: Path,
+    values_a: list[float],
+    values_b: list[float],
+    color_a: Color = (37, 99, 235),
+    color_b: Color = (220, 38, 38),
+) -> None:
+    img, left, right, top, bottom = _plot_frame()
+    n = min(len(values_a), len(values_b))
+    if n <= 0:
+        _write_png(path, img)
+        return
+    merged = [float(values_a[i]) for i in range(n)] + [float(values_b[i]) for i in range(n)]
+    norm_all, _, _ = _normalize(merged)
+    norm_a = norm_all[:n]
+    norm_b = norm_all[n:]
+    if n == 1:
+        x = (left + right) // 2
+        y_a = int(bottom - norm_a[0] * (bottom - top))
+        y_b = int(bottom - norm_b[0] * (bottom - top))
+        _rect(img, x - 3, y_a - 3, x + 3, y_a + 3, color_a)
+        _rect(img, x - 3, y_b - 3, x + 3, y_b + 3, color_b)
+    else:
+        for i in range(n - 1):
+            x0 = int(left + i * (right - left) / (n - 1))
+            x1 = int(left + (i + 1) * (right - left) / (n - 1))
+            y0a = int(bottom - norm_a[i] * (bottom - top))
+            y1a = int(bottom - norm_a[i + 1] * (bottom - top))
+            y0b = int(bottom - norm_b[i] * (bottom - top))
+            y1b = int(bottom - norm_b[i + 1] * (bottom - top))
+            _line(img, x0, y0a, x1, y1a, color_a, thickness=2)
+            _line(img, x0, y0b, x1, y1b, color_b, thickness=2)
+    _write_png(path, img)
+
+
 def save_bar_chart(path: Path, values: list[float], color: Color = (14, 165, 233)) -> None:
     img, left, right, top, bottom = _plot_frame()
     if not values:

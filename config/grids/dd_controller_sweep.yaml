@@ -1,0 +1,21 @@
+rolling_peak_window_bars:
+  - 720
+  - 1440
+
+stage_down_confirm_bars:
+  - 48
+  - 96
+
+stage3_down_confirm_bars:
+  - 96
+
+dd_thresholds:
+  - [0.10, 0.20, 0.30, 0.40]
+
+dd_gross_mults:
+  - [1.0, 0.7, 0.5, 0.3, 0.0]
+
+dd_recover_thresholds:
+  - [0.08, 0.16, 0.24, 0.32]
+
+kill_cooldown_bars: 168

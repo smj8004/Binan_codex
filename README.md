@@ -1,4 +1,4 @@
-# binance-trader
+﻿# binance-trader
 
 Python 3.11+ Binance USDT-M trading toolkit with:
 - Backtest / Optimize / Replay
@@ -63,7 +63,7 @@ PROTECTIVE_MISSING_POLICY=halt
 
 ## Backtest
 
-PowerShell/Windows 환경에서는 가상환경 혼선을 줄이기 위해 `uv run --active ...` 형태를 권장합니다.
+PowerShell/Windows ?섍꼍?먯꽌??媛?곹솚寃??쇱꽑??以꾩씠湲??꾪빐 `uv run --active ...` ?뺥깭瑜?沅뚯옣?⑸땲??
 
 ```bash
 uv run trader backtest --symbol BTC/USDT --timeframe 1h --limit 500
@@ -71,13 +71,13 @@ uv run trader backtest --symbol BTC/USDT --timeframe 1h --limit 500
 
 ## Paper Example
 
-Windows 권장:
+Windows 沅뚯옣:
 
 ```powershell
 uv run --active trader run --mode paper --symbol BTC/USDT --timeframe 1m --strategy ema_cross --max-bars 200
 ```
 
-멀티 심볼(동시 감시/주문):
+硫???щ낵(?숈떆 媛먯떆/二쇰Ц):
 
 ```powershell
 uv run --active trader run --mode paper --data-mode websocket --symbols BTC/USDT,ETH/USDT --timeframe 1m --strategy ema_cross --max-bars 200
@@ -200,6 +200,31 @@ uv run trader experiments \
   --high-vol-gross-mult 0.5 \
   --turnover-threshold-low-vol 0.05 \
   --turnover-threshold-high-vol 0.20 \
+  --cap-mode adaptive \
+  --base-cap 0.25 --cap-min 0.20 --cap-max 0.40 \
+  --backlog-thresholds 0.25,0.50,0.75 \
+  --cap-steps 0.25,0.30,0.35,0.40 \
+  --high-vol-cap-max 0.30 \
+  --dd-controller \
+  --dd-thresholds 0.10,0.20,0.30,0.40 \
+  --dd-gross-mults 1.0,0.7,0.5,0.3,0.0 \
+  --dd-recover-thresholds 0.08,0.16,0.24,0.32 \
+  --kill-cooldown-bars 168 \
+  --disable-new-entry-when-dd \
+  --enable-liquidation \
+  --equity-floor-ratio 0.01 \
+  --trading-halt-bars 168 \
+  --skip-trades-if-cost-exceeds-equity-ratio 0.02 \
+  --transition-smoother \
+  --gross-step-up 0.10 \
+  --gross-step-down 0.25 \
+  --post-halt-cooldown-bars 168 \
+  --post-halt-max-gross 0.15 \
+  --liquidation-lookback-bars 720 \
+  --liquidation-lookback-max-gross 0.15 \
+  --max-turnover-notional-to-equity 0.25 \
+  --drift-threshold 0.35 \
+  --gross-decay-steps 3 \
   --debug-mode \
   --seed 42
 ```
@@ -207,10 +232,14 @@ uv run trader experiments \
 Portfolio outputs are saved under `out/experiments/<portfolio_run_id>/`:
 - `report.md`, `summary.csv`, `summary.json`
 - `diagnostics.json` (rebalance_attempts/execs, skip reasons, safety events)
-- `debug_dump.json` (equity crash/anomaly 직전 이벤트)
+- `debug_dump.json` (equity crash/anomaly 吏곸쟾 ?대깽??
 - `portfolio_equity_curve.csv`
+- `dd_timeline.csv` (timestamp/equity/peak/drawdown/dd_stage/effective_gross)
+- `gross_target_vs_applied.csv` (target gross vs applied gross transition series)
 - `portfolio_positions.csv` (timestamp/symbol weights and holdings)
 - `turnover.csv`
+- `liquidation_events.csv` (liquidation timestamp, equity before/after, costs, reason)
+- `rate_limit_comparison.csv` (same config cap off vs cap on comparison)
 - `cost_breakdown.csv`
 - `cost_stress.csv`, `cost_sensitivity.csv`
 - `walk_forward_windows.csv`, `walk_forward_candidates.csv`
@@ -218,11 +247,22 @@ Portfolio outputs are saved under `out/experiments/<portfolio_run_id>/`:
 - `plots/*.png`
 
 Metric definitions:
-- `rebalance_attempt_count`: warmup 이후 스케줄상 리밸런스 "검토" 횟수
-- `rebalance_exec_count`: 실제 주문/포지션 변경이 발생한 횟수
-- `avg_turnover_ratio`: executions 기준 평균 turnover
-- `avg_turnover_ratio_attempts`: attempts 기준 평균 turnover
-
+- `rebalance_attempt_count`: warmup ?댄썑 ?ㅼ?以꾩긽 由щ갭?곗뒪 "寃?? ?잛닔
+- `rebalance_exec_count`: ?ㅼ젣 二쇰Ц/?ъ???蹂寃쎌씠 諛쒖깮???잛닔
+- `avg_turnover_ratio`: executions 湲곗? ?됯퇏 turnover
+- `avg_turnover_ratio_attempts`: attempts 湲곗? ?됯퇏 turnover
+- `turnover_cap_notional`: rebalance 1?뚮떦 ?덉슜 turnover notional 罹?(`-1` means cap off)
+- `turnover_executed_fraction`: 紐⑺몴 turnover ?鍮??ㅼ젣 吏묓뻾 鍮꾩쑉
+- `backlog_notional`: cap/鍮꾩슜 李⑤떒?쇰줈 誘몄쭛?됰맂 紐⑺몴 ?붾웾 notional
+- `backlog_ratio`: `backlog_notional / equity`
+- `cap_used`: ?대떦 由щ갭?곗뒪 諛붿뿉???ㅼ젣 ?ъ슜??cap 媛?- `diagnostics.cap_histogram`: cap ?ъ슜 鍮덈룄 遺꾪룷
+- `diagnostics.dd_trigger_counts`: DD stage 吏꾩엯 ?잛닔
+- `diagnostics.time_in_dd_stage`: DD stage 泥대쪟 bar ??
+Liquidation diagnostics:
+- `diagnostics.liquidation_events`: liquidation count + first timestamp
+- `diagnostics.negative_equity_cause_counts`: root-cause counts (`fee/slippage/penalty/price_gap/gross_transition/backlog_execution`)
+- `liquidation_events.csv`: per-event details (`ts,equity_before,equity_after,gross,dd_stage,regime,turnover_notional,fee,slippage,penalty,reason`)
+- `transition_smoother_comparison.csv`: smoother off vs on (`liquidation_count`, `gross_transition_cause_count`, `max_drawdown`, `fee_cost_total`)
 ## Candidate Systems Batch (Track A/B/C)
 
 Run 3 system candidates with hard-gate evaluation:
@@ -238,7 +278,7 @@ uv run trader system-batch \
 Output:
 - `out/experiments/<batch_run_id>/batch_summary.csv`
 - `out/experiments/<batch_run_id>/<candidate_id>/report.md`
-- candidate별 `symbols/<symbol>/<run_id>/` 하위에 `report.md`, `summary.csv/json`, `plots/*` 생성
+- candidate蹂?`symbols/<symbol>/<run_id>/` ?섏쐞??`report.md`, `summary.csv/json`, `plots/*` ?앹꽦
 
 Candidate definitions:
 - [guide/SYSTEM_CANDIDATES.md](/mnt/c/Users/smjan/Desktop/code/Binance_codex/guide/SYSTEM_CANDIDATES.md)
@@ -261,7 +301,7 @@ uv run trader run --mode live --dry-run --symbol BTC/USDT --timeframe 1m \
   --yes-i-understand-live-risk
 ```
 
-멀티 심볼 드라이런:
+硫???щ낵 ?쒕씪?대윴:
 
 ```powershell
 $env:BINANCE_ENV="mainnet"
@@ -284,27 +324,25 @@ uv run trader run --mode live --one-shot --symbol BTC/USDT --timeframe 1m --yes-
 uv run trader run --mode live --resume --resume-run-id <id> --symbol BTC/USDT --timeframe 1m --yes-i-understand-live-risk
 ```
 
-## Sleep Mode 운영 가이드
+## Sleep Mode ?댁쁺 媛?대뱶
 
-Sleep Mode는 무감시(자가동) 환경에서 수익보다 계좌 생존을 우선하도록 설계된 보수적 패키지입니다.
+Sleep Mode??臾닿컧???먭??? ?섍꼍?먯꽌 ?섏씡蹂대떎 怨꾩쥖 ?앹〈???곗꽑?섎룄濡??ㅺ퀎??蹂댁닔???⑦궎吏?낅땲??
 
-권장 단계:
-1. `paper` 2주
-2. `testnet` 1주
-3. `mainnet` 소액
+沅뚯옣 ?④퀎:
+1. `paper` 2二?2. `testnet` 1二?3. `mainnet` ?뚯븸
 
-권장 기본값:
-- 배분(`ACCOUNT_ALLOCATION_PCT`) 10~20%
-- 레버리지(`LEVERAGE`) 1~2
-- 일손실 한도(`DAILY_LOSS_LIMIT_PCT`) 1~2%
-- 최대 낙폭(`MAX_DRAWDOWN_PCT`) 5~10%
+沅뚯옣 湲곕낯媛?
+- 諛곕텇(`ACCOUNT_ALLOCATION_PCT`) 10~20%
+- ?덈쾭由ъ?(`LEVERAGE`) 1~2
+- ?쇱넀???쒕룄(`DAILY_LOSS_LIMIT_PCT`) 1~2%
+- 理쒕? ?숉룺(`MAX_DRAWDOWN_PCT`) 5~10%
 
-프리셋:
+?꾨━??
 - `config/presets/sleep_mode.yaml`
 - `config/presets/conservative.yaml`
-- `config/presets/aggressive.yaml` (경고용, 기본 비활성 권장)
+- `config/presets/aggressive.yaml` (寃쎄퀬?? 湲곕낯 鍮꾪솢??沅뚯옣)
 
-프리셋 적용:
+?꾨━???곸슜:
 
 ```bash
 uv run trader arm-sleep --preset sleep_mode
@@ -312,15 +350,15 @@ uv run trader run --mode paper --sleep-mode --symbol BTC/USDT --timeframe 1m --m
 uv run trader run --mode live --dry-run --sleep-mode --env testnet --symbol BTC/USDT --timeframe 1m --yes-i-understand-live-risk
 ```
 
-주의:
-- `LIVE_TRADING`은 자동으로 `true`로 바뀌지 않습니다.
-- 실주문은 `LIVE_TRADING=true` + `--yes-i-understand-live-risk`일 때만 가능합니다.
+二쇱쓽:
+- `LIVE_TRADING`? ?먮룞?쇰줈 `true`濡?諛붾뚯? ?딆뒿?덈떎.
+- ?ㅼ＜臾몄? `LIVE_TRADING=true` + `--yes-i-understand-live-risk`???뚮쭔 媛?ν빀?덈떎.
 
-절대 피해야 할 설정:
-- `LEVERAGE > 2`를 무감시로 운영
+?덈? ?쇳빐?????ㅼ젙:
+- `LEVERAGE > 2`瑜?臾닿컧?쒕줈 ?댁쁺
 - `DAILY_LOSS_LIMIT_PCT > 2%`
 - `ACCOUNT_ALLOCATION_PCT > 30%`
-- `LIVE_TRADING=true` + `BINANCE_ENV=mainnet`를 사전 검증 없이 바로 사용
+- `LIVE_TRADING=true` + `BINANCE_ENV=mainnet`瑜??ъ쟾 寃利??놁씠 諛붾줈 ?ъ슜
 
 ## Pre-flight Checks (Live Start)
 
@@ -412,3 +450,4 @@ Protective orders are strongly recommended for live:
 8. Configure Telegram/Discord alerts and test halt notifications.
 9. Use `trader status --latest` during operations and after restart.
 10. Move to mainnet with minimal notional first, then scale gradually.
+

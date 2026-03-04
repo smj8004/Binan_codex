@@ -28,6 +28,7 @@ from .report import (
     save_histogram,
     save_json,
     save_line_chart,
+    save_dual_line_chart,
     write_markdown_report,
 )
 
@@ -61,6 +62,10 @@ class PortfolioParams:
     turnover_threshold: float
     vol_lookback: int
     rank_buffer: int = 0
+    high_vol_percentile: float = 0.65
+    gross_map: str = "balanced"
+    off_grace_bars: int = 0
+    phased_entry_steps: int = 1
 
 
 @dataclass(frozen=True)
@@ -100,11 +105,68 @@ class PortfolioMarketData:
 class PortfolioSimResult:
     metrics: dict[str, float]
     equity_curve: pd.DataFrame
+    dd_timeline: pd.DataFrame
+    gross_target_applied: pd.DataFrame
+    excluded_symbols: pd.DataFrame
+    symbol_risk_caps: pd.DataFrame
     positions: pd.DataFrame
     turnover: pd.DataFrame
     cost_breakdown: pd.DataFrame
+    liquidation_events: pd.DataFrame
     diagnostics: dict[str, Any]
     debug_dump: list[dict[str, Any]]
+
+
+REGIME_GROSS_PROFILES: dict[str, dict[str, float]] = {
+    "highvol_050": {
+        "trend|low_vol": 1.0,
+        "range|low_vol": 1.0,
+        "trend|high_vol": 0.50,
+        "range|high_vol": 0.25,
+    },
+    "balanced": {
+        "trend|low_vol": 1.0,
+        "range|low_vol": 1.0,
+        "trend|high_vol": 0.25,
+        "range|high_vol": 0.10,
+    },
+    "conservative": {
+        "trend|low_vol": 1.0,
+        "range|low_vol": 1.0,
+        "trend|high_vol": 0.10,
+        "range|high_vol": 0.00,
+    },
+    "off_range_highvol": {
+        "trend|low_vol": 1.0,
+        "range|low_vol": 0.75,
+        "trend|high_vol": 0.25,
+        "range|high_vol": 0.00,
+    },
+    "ultra_defensive": {
+        "trend|low_vol": 0.75,
+        "range|low_vol": 0.75,
+        "trend|high_vol": 0.10,
+        "range|high_vol": 0.00,
+    },
+    "off_highvol_all": {
+        "trend|low_vol": 1.0,
+        "range|low_vol": 0.75,
+        "trend|high_vol": 0.00,
+        "range|high_vol": 0.00,
+    },
+    "minimal_risk": {
+        "trend|low_vol": 0.25,
+        "range|low_vol": 0.00,
+        "trend|high_vol": 0.00,
+        "range|high_vol": 0.00,
+    },
+    "aggressive": {
+        "trend|low_vol": 1.0,
+        "range|low_vol": 1.0,
+        "trend|high_vol": 0.25,
+        "range|high_vol": 0.25,
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -823,12 +885,28 @@ def _portfolio_signal_scores(
     close_slice: np.ndarray,
     *,
     signal_model: Literal["momentum", "mean_reversion"],
+    mode: Literal["single", "median_3"] = "single",
 ) -> np.ndarray:
-    start = close_slice[0]
     end = close_slice[-1]
-    scores = np.zeros_like(end, dtype=float)
-    valid = start > 0
-    scores[valid] = (end[valid] / start[valid]) - 1.0
+    scores = np.full_like(end, np.nan, dtype=float)
+    if mode == "median_3":
+        lookbacks = (24 * 7, 24 * 14, 24 * 28)
+        stack: list[np.ndarray] = []
+        for lb in lookbacks:
+            if close_slice.shape[0] < lb + 1:
+                continue
+            start_i = close_slice[-(lb + 1)]
+            part = np.full_like(end, np.nan, dtype=float)
+            valid_i = start_i > 0
+            part[valid_i] = (end[valid_i] / start_i[valid_i]) - 1.0
+            stack.append(part)
+        if stack:
+            scores = np.nanmedian(np.vstack(stack), axis=0)
+    else:
+        start = close_slice[0]
+        valid = start > 0
+        scores = np.zeros_like(end, dtype=float)
+        scores[valid] = (end[valid] / start[valid]) - 1.0
     if signal_model == "mean_reversion":
         scores = -scores
     return scores
@@ -849,27 +927,32 @@ def _portfolio_target_weights(
     prev_short_idx: set[int] | None,
     gross_exposure: float,
     signal_model: Literal["momentum", "mean_reversion"],
+    lookback_score_mode: Literal["single", "median_3"] = "single",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
     symbol_count = close.shape[1]
     weights = np.zeros(symbol_count, dtype=float)
-    if idx <= lookback_bars or symbol_count < max(k * 2, 2):
-        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "warmup"
+    score_mode = str(lookback_score_mode).strip().lower()
+    if score_mode not in {"single", "median_3"}:
+        score_mode = "single"
     lb = max(int(lookback_bars), 1)
+    score_lb = max(lb, 24 * 28) if score_mode == "median_3" else lb
+    if idx <= score_lb or symbol_count < max(k * 2, 2):
+        return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "warmup"
     vol_lb = max(int(vol_lookback), 5)
-    if idx < max(lb, vol_lb):
+    if idx < max(score_lb, vol_lb):
         return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "warmup"
 
-    score_window = close[idx - lb : idx + 1]
-    if score_window.shape[0] < lb + 1:
+    score_window = close[idx - score_lb : idx + 1]
+    if score_window.shape[0] < score_lb + 1:
         return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "insufficient_score_window"
     valid_price = np.all(
-        np.isfinite(open_[idx - lb : idx + 1])
-        & np.isfinite(high[idx - lb : idx + 1])
-        & np.isfinite(low[idx - lb : idx + 1])
-        & np.isfinite(close[idx - lb : idx + 1]),
+        np.isfinite(open_[idx - score_lb : idx + 1])
+        & np.isfinite(high[idx - score_lb : idx + 1])
+        & np.isfinite(low[idx - score_lb : idx + 1])
+        & np.isfinite(close[idx - score_lb : idx + 1]),
         axis=0,
-    ) & (np.min(open_[idx - lb : idx + 1], axis=0) > 1e-9) & (np.min(close[idx - lb : idx + 1], axis=0) > 1e-9)
-    scores = _portfolio_signal_scores(score_window, signal_model=signal_model)
+    ) & (np.min(open_[idx - score_lb : idx + 1], axis=0) > 1e-9) & (np.min(close[idx - score_lb : idx + 1], axis=0) > 1e-9)
+    scores = _portfolio_signal_scores(score_window, signal_model=signal_model, mode=score_mode)  # type: ignore[arg-type]
     valid = np.isfinite(scores) & valid_price
     if int(valid.sum()) < max(k * 2, 2):
         return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "insufficient_valid_symbols"
@@ -880,15 +963,25 @@ def _portfolio_target_weights(
     long_idx = ordered[-k:].astype(int)
     if len(set(long_idx.tolist()).intersection(set(short_idx.tolist()))) > 0:
         return weights, np.asarray([], dtype=int), np.asarray([], dtype=int), "long_short_overlap"
-    if rank_buffer > 0 and len(ordered) >= max((k + rank_buffer) * 2, 2):
-        long_pool = ordered[-(k + rank_buffer) :].astype(int)
-        short_pool = ordered[: (k + rank_buffer)].astype(int)
+    if rank_buffer > 0 and len(ordered) >= max(k * 2, 2):
+        band = min(k + rank_buffer, len(ordered))
+        long_pool = ordered[-band:].astype(int)
+        short_pool = ordered[:band].astype(int)
+        long_core = ordered[-k:].astype(int)
+        short_core = ordered[:k].astype(int)
         long_selected: list[int] = []
         short_selected: list[int] = []
         prev_long = prev_long_idx or set()
         prev_short = prev_short_idx or set()
-        for x in long_pool:
+        for x in reversed(long_pool.tolist()):
             if int(x) in prev_long and int(x) not in long_selected:
+                long_selected.append(int(x))
+            if len(long_selected) >= k:
+                break
+        for x in reversed(long_core.tolist()):
+            if len(long_selected) >= k:
+                break
+            if int(x) not in long_selected:
                 long_selected.append(int(x))
         for x in reversed(long_pool.tolist()):
             if len(long_selected) >= k:
@@ -897,6 +990,13 @@ def _portfolio_target_weights(
                 long_selected.append(int(x))
         for x in short_pool:
             if int(x) in prev_short and int(x) not in short_selected:
+                short_selected.append(int(x))
+            if len(short_selected) >= k:
+                break
+        for x in short_core.tolist():
+            if len(short_selected) >= k:
+                break
+            if int(x) not in short_selected:
                 short_selected.append(int(x))
         for x in short_pool.tolist():
             if len(short_selected) >= k:
@@ -942,6 +1042,39 @@ def _portfolio_interval_metrics(interval_pnls: list[float]) -> tuple[float, floa
     return win_rate, profit_factor
 
 
+def _resolve_turnover_cap_used(
+    *,
+    cap_mode: Literal["fixed", "adaptive"],
+    backlog_ratio: float,
+    regime_label: str,
+    base_cap: float,
+    cap_min: float,
+    cap_max: float,
+    backlog_thresholds: tuple[float, float, float],
+    cap_steps: tuple[float, float, float, float],
+    high_vol_cap_max: float,
+) -> float | None:
+    if cap_mode == "fixed":
+        cap = float(base_cap)
+    else:
+        t1, t2, t3 = backlog_thresholds
+        c1, c2, c3, c4 = cap_steps
+        if backlog_ratio <= t1:
+            cap = float(c1)
+        elif backlog_ratio <= t2:
+            cap = float(c2)
+        elif backlog_ratio <= t3:
+            cap = float(c3)
+        else:
+            cap = float(c4)
+    cap = min(max(cap, float(cap_min)), float(cap_max))
+    if "high_vol" in regime_label:
+        cap = min(cap, max(float(high_vol_cap_max), 0.0))
+    if cap <= 0.0:
+        return None
+    return cap
+
+
 def _simulate_portfolio(
     *,
     market: PortfolioMarketData,
@@ -956,11 +1089,116 @@ def _simulate_portfolio(
     regime_turnover_threshold_map: dict[str, float] | None = None,
     debug_mode: bool = False,
     max_cost_ratio_per_bar: float = 0.05,
+    dd_controller_enabled: bool = False,
+    dd_thresholds: tuple[float, float, float, float] = (0.10, 0.20, 0.30, 0.40),
+    dd_gross_mults: tuple[float, float, float, float, float] = (1.0, 0.70, 0.50, 0.30, 0.0),
+    dd_recover_thresholds: tuple[float, float, float, float] = (0.08, 0.16, 0.24, 0.32),
+    kill_cooldown_bars: int = 168,
+    disable_new_entry_when_dd: bool = True,
+    rolling_peak_window_bars: int | None = None,
+    stage_down_confirm_bars: int = 48,
+    stage3_down_confirm_bars: int = 96,
+    reentry_ramp_steps: int = 3,
+    disable_new_entry_stage: int = 3,
+    dd_turnover_threshold_mult: float = 1.5,
+    dd_rebalance_mult: float | None = None,
+    cap_mode: Literal["fixed", "adaptive"] = "fixed",
+    base_cap: float = 0.25,
+    cap_min: float = 0.20,
+    cap_max: float = 0.40,
+    backlog_thresholds: tuple[float, float, float] = (0.25, 0.50, 0.75),
+    cap_steps: tuple[float, float, float, float] = (0.25, 0.30, 0.35, 0.40),
+    high_vol_cap_max: float = 0.30,
+    # legacy alias: fixed turnover cap
+    max_turnover_notional_to_equity: float | None = 0.25,
+    drift_threshold: float | None = 0.35,
+    gross_decay_steps: int = 3,
     max_notional_to_equity_mult: float = 3.0,
+    enable_liquidation: bool = True,
+    equity_floor_ratio: float = 0.01,
+    trading_halt_bars: int = 168,
+    skip_trades_if_cost_exceeds_equity_ratio: float = 0.02,
+    transition_smoother_enabled: bool = False,
+    gross_step_up: float = 0.10,
+    gross_step_down: float = 0.25,
+    post_halt_cooldown_bars: int = 168,
+    post_halt_max_gross: float = 0.15,
+    liquidation_lookback_bars: int = 720,
+    liquidation_lookback_max_gross: float = 0.15,
+    enable_symbol_shock_filters: bool = True,
+    max_abs_weight_per_symbol: float = 0.12,
+    atr_shock_threshold: float = 2.5,
+    gap_shock_threshold: float = 0.10,
+    shock_cooldown_bars: int = 72,
+    shock_mode: Literal["exclude", "downweight"] = "downweight",
+    shock_weight_mult_atr: float = 0.25,
+    shock_weight_mult_gap: float = 0.10,
+    shock_freeze_rebalance: bool | None = None,
+    shock_freeze_min_fraction: float = 0.30,
+    lookback_score_mode: Literal["single", "median_3"] = "single",
     stop_on_anomaly: bool = False,
 ) -> PortfolioSimResult:
     if market.bars <= 2:
         raise ValueError("insufficient bars for portfolio simulation")
+    if dd_controller_enabled:
+        if len(dd_thresholds) != 4:
+            dd_thresholds = (0.10, 0.20, 0.30, 0.40)
+        if len(dd_gross_mults) != 5:
+            dd_gross_mults = (1.0, 0.70, 0.50, 0.30, 0.0)
+        if len(dd_recover_thresholds) != 4:
+            dd_recover_thresholds = (0.08, 0.16, 0.24, 0.32)
+        dd_thresholds = tuple(sorted(float(x) for x in dd_thresholds))  # type: ignore[assignment]
+        dd_recover_thresholds = tuple(sorted(float(x) for x in dd_recover_thresholds))  # type: ignore[assignment]
+        dd_gross_mults = tuple(max(float(x), 0.0) for x in dd_gross_mults)  # type: ignore[assignment]
+    else:
+        dd_thresholds = (1.1, 1.2, 1.3, 1.4)
+        dd_recover_thresholds = (1.0, 1.0, 1.0, 1.0)
+        dd_gross_mults = (1.0, 1.0, 1.0, 1.0, 1.0)
+    if rolling_peak_window_bars is not None and int(rolling_peak_window_bars) <= 0:
+        rolling_peak_window_bars = None
+    stage_down_confirm_bars = max(int(stage_down_confirm_bars), 1)
+    stage3_down_confirm_bars = max(int(stage3_down_confirm_bars), stage_down_confirm_bars)
+    reentry_ramp_steps = max(int(reentry_ramp_steps), 1)
+    disable_new_entry_stage = max(int(disable_new_entry_stage), 1)
+    dd_turnover_threshold_mult = max(float(dd_turnover_threshold_mult), 1.0)
+    if dd_rebalance_mult is not None and float(dd_rebalance_mult) <= 1.0:
+        dd_rebalance_mult = None
+    equity_floor_ratio = min(max(float(equity_floor_ratio), 0.0), 0.99)
+    trading_halt_bars = max(int(trading_halt_bars), 0)
+    skip_trades_if_cost_exceeds_equity_ratio = max(float(skip_trades_if_cost_exceeds_equity_ratio), 0.0)
+    gross_step_up = max(float(gross_step_up), 0.0)
+    gross_step_down = max(float(gross_step_down), 0.0)
+    post_halt_cooldown_bars = max(int(post_halt_cooldown_bars), 0)
+    post_halt_max_gross = max(float(post_halt_max_gross), 0.0)
+    liquidation_lookback_bars = max(int(liquidation_lookback_bars), 0)
+    liquidation_lookback_max_gross = max(float(liquidation_lookback_max_gross), 0.0)
+    max_abs_weight_per_symbol = max(float(max_abs_weight_per_symbol), 0.0)
+    atr_shock_threshold = max(float(atr_shock_threshold), 0.0)
+    gap_shock_threshold = max(float(gap_shock_threshold), 0.0)
+    shock_cooldown_bars = max(int(shock_cooldown_bars), 0)
+    shock_mode = str(shock_mode).strip().lower()  # type: ignore[assignment]
+    if shock_mode not in {"exclude", "downweight"}:
+        shock_mode = "downweight"  # type: ignore[assignment]
+    shock_weight_mult_atr = min(max(float(shock_weight_mult_atr), 0.0), 1.0)
+    shock_weight_mult_gap = min(max(float(shock_weight_mult_gap), 0.0), 1.0)
+    if shock_freeze_rebalance is None:
+        shock_freeze_rebalance = bool(shock_mode == "downweight")
+    else:
+        shock_freeze_rebalance = bool(shock_freeze_rebalance)
+    shock_freeze_min_fraction = min(max(float(shock_freeze_min_fraction), 0.0), 1.0)
+    lookback_score_mode = str(lookback_score_mode).strip().lower()  # type: ignore[assignment]
+    if lookback_score_mode not in {"single", "median_3"}:
+        lookback_score_mode = "single"  # type: ignore[assignment]
+    if cap_mode not in {"fixed", "adaptive"}:
+        cap_mode = "fixed"
+    t = tuple(float(x) for x in backlog_thresholds)
+    if len(t) != 3:
+        t = (0.25, 0.50, 0.75)
+    c = tuple(float(x) for x in cap_steps)
+    if len(c) != 4:
+        c = (0.25, 0.30, 0.35, 0.40)
+    backlog_thresholds = tuple(sorted(t))  # type: ignore[assignment]
+    cap_steps = c  # type: ignore[assignment]
     n = market.bars
     s = market.symbol_count
     close = market.close
@@ -972,10 +1210,17 @@ def _simulate_portfolio(
 
     qty = np.zeros(s, dtype=float)
     cash = float(base_config.initial_equity)
+    initial_equity = float(base_config.initial_equity)
+    equity_floor = max(initial_equity * equity_floor_ratio, 1e-9)
     equity_points: list[dict[str, Any]] = []
+    dd_rows: list[dict[str, Any]] = []
+    gross_rows: list[dict[str, Any]] = []
+    excluded_rows: list[dict[str, Any]] = []
+    risk_cap_rows: list[dict[str, Any]] = []
     position_rows: list[dict[str, Any]] = []
     turnover_rows: list[dict[str, Any]] = []
     cost_rows: list[dict[str, Any]] = []
+    liquidation_rows: list[dict[str, Any]] = []
     interval_pnls: list[float] = []
     trade_count = 0
     fill_count = 0
@@ -988,6 +1233,21 @@ def _simulate_portfolio(
     rebalance_execs = 0
     skip_reasons: dict[str, int] = {}
     debug_events: list[dict[str, Any]] = []
+    liquidation_reason_counts: dict[str, int] = {
+        "negative_equity_due_to_fee": 0,
+        "negative_equity_due_to_slippage": 0,
+        "negative_equity_due_to_penalty": 0,
+        "negative_equity_due_to_price_gap": 0,
+        "negative_equity_due_to_gross_transition": 0,
+        "negative_equity_due_to_backlog_execution": 0,
+        "negative_equity_due_to_other": 0,
+    }
+    excluded_counts_by_reason: dict[str, int] = {"atr_shock": 0, "gap_shock": 0, "missing_data": 0}
+    shocked_counts_by_reason: dict[str, int] = {"atr_shock": 0, "gap_shock": 0, "missing_data": 0}
+    shocked_symbol_counts: dict[str, int] = {}
+    shocked_mult_sum_by_reason: dict[str, float] = {"atr_shock": 0.0, "gap_shock": 0.0, "missing_data": 0.0}
+    shocked_mult_count_by_reason: dict[str, int] = {"atr_shock": 0, "gap_shock": 0, "missing_data": 0}
+    cap_hit_counts_by_symbol: dict[str, int] = {}
 
     rng = random.Random(int(seed))
     warmup = max(params.lookback_bars, params.vol_lookback + 1)
@@ -997,17 +1257,95 @@ def _simulate_portfolio(
     last_weights = np.zeros(s, dtype=float)
     prev_long_idx: set[int] = set()
     prev_short_idx: set[int] = set()
+    prev_effective_scale: float = 1.0
+    phased_progress: int = 0
+    off_bars = 0
+    on_bars = 0
+    off_to_on_count = 0
+    on_to_off_count = 0
+    gross_change_turnover = 0.0
+    off_decay_progress = 0
+    cap_hit_count = 0
+    executed_fraction_sum = 0.0
+    executed_fraction_count = 0
+    backlog_notional_sum = 0.0
+    backlog_notional_max = 0.0
+    backlog_ratio_sum = 0.0
+    backlog_ratio_max = 0.0
+    prev_backlog_notional = 0.0
+    cap_used_sum = 0.0
+    cap_used_count = 0
+    cap_histogram: dict[str, int] = {}
+    reduce_first_candidates = 0
+    reduce_first_execs = 0
+    reduce_first_total_execs = 0
+    effective_base_cap = float(base_cap)
+    if cap_mode == "fixed" and max_turnover_notional_to_equity is not None:
+        effective_base_cap = float(max_turnover_notional_to_equity)
+    drift_force_count = 0
+    peak_equity = float(base_config.initial_equity)
+    dd_stage = 0
+    dd_trigger_counts: dict[str, int] = {f"stage_{i}": 0 for i in range(len(dd_gross_mults))}
+    time_in_dd_stage: dict[str, int] = {f"stage_{i}": 0 for i in range(len(dd_gross_mults))}
+    kill_switch_count = 0
+    kill_switch_first_ts: str | None = None
+    kill_bars = 0
+    kill_cooldown_left = 0
+    stage_transitions_up = 0
+    stage_transitions_down = 0
+    stage_down_confirm_accum_bars = 0
+    prev_attempt_idx: int | None = None
+    dd_rebalance_counter = 0
+    stage3_streak_bars = 0
+    stage3_longest_streak_bars = 0
+    gross_sum_by_stage: dict[str, float] = {f"stage_{i}": 0.0 for i in range(len(dd_gross_mults))}
+    gross_cnt_by_stage: dict[str, int] = {f"stage_{i}": 0 for i in range(len(dd_gross_mults))}
+    reentry_ramp_active = False
+    reentry_ramp_from = 1.0
+    reentry_ramp_to = 1.0
+    reentry_ramp_progress = 0
+    dd_mult_last = 1.0
+    trading_halt_left = 0
+    post_halt_cooldown_left = 0
+    post_halt_reentry_step = 0
+    last_halt_release_idx: int | None = None
+    liquidation_indices: list[int] = []
+    symbol_shock_cooldown_left = np.zeros(s, dtype=int)
+    symbol_shock_reason = np.array([""] * s, dtype=object)
+    any_shock_active_bar_count = 0
+    shock_active_bars_count = 0
+    rebalance_skipped_due_to_shock_count = 0
+    liquidation_after_halt_count = 0
+    gross_transition_magnitude_sum = 0.0
+    gross_transition_max = 0.0
+    gross_error_sum = 0.0
+    gross_error_max = 0.0
+    applied_gross_sum = 0.0
+    applied_gross_sq_sum = 0.0
+    applied_gross_count = 0
+    gross_exposure_time_sum = 0.0
+    fee_cost_per_gross_time = 0.0
+    rolling_peak_records: list[tuple[int, float]] = []
+    regime_off_bars: dict[str, int] = {}
+    regime_total_bars: dict[str, int] = {}
     for idx in rebalance_idxs:
         rebalance_attempts += 1
         mark_prices = close[idx]
         equity = float(cash + np.dot(qty, mark_prices))
         if not math.isfinite(equity):
-            equity = 0.0
+            equity = equity_floor if enable_liquidation else 0.0
             qty[:] = 0.0
-            cash = 0.0
+            cash = equity
         if prev_rebalance_equity is not None:
             interval_pnls.append(equity - prev_rebalance_equity)
         prev_rebalance_equity = equity
+        equity_abs = max(abs(equity), 1e-9)
+        current_weights = (qty * mark_prices) / equity_abs
+        had_open_position = bool(np.any(np.abs(qty) > 1e-12))
+        liquidation_triggered = False
+        if enable_liquidation and equity <= equity_floor and had_open_position:
+            liquidation_triggered = True
+            trading_halt_left = max(trading_halt_left, trading_halt_bars)
 
         ts_key = _ts_key(timestamps[idx])
         regime_label = regime_by_ts.get(ts_key, "range|low_vol") if regime_by_ts else "all"
@@ -1018,41 +1356,447 @@ def _simulate_portfolio(
                 regime_scale = 0.0
         elif regime_mode == "sizing":
             regime_scale = float((regime_size_map or {}).get(regime_label, 1.0))
-        turnover_threshold = float((regime_turnover_threshold_map or {}).get(regime_label, params.turnover_threshold))
+        regime_total_bars[regime_label] = int(regime_total_bars.get(regime_label, 0)) + 1
 
-        target_weights, long_idx, short_idx, target_status = _portfolio_target_weights(
-            close=close,
-            open_=open_,
-            high=high,
-            low=low,
-            idx=idx,
-            lookback_bars=params.lookback_bars,
-            vol_lookback=params.vol_lookback,
-            k=params.k,
-            rank_buffer=params.rank_buffer,
-            prev_long_idx=prev_long_idx,
-            prev_short_idx=prev_short_idx,
-            gross_exposure=params.gross_exposure * regime_scale,
-            signal_model=params.signal_model,
+        bars_elapsed = max((idx - prev_attempt_idx), 1) if prev_attempt_idx is not None else max(int(params.rebalance_bars), 1)
+        prev_attempt_idx = idx
+        if enable_symbol_shock_filters and np.any(symbol_shock_cooldown_left > 0):
+            symbol_shock_cooldown_left = np.maximum(symbol_shock_cooldown_left - bars_elapsed, 0)
+            for sym_i in range(s):
+                if symbol_shock_cooldown_left[sym_i] <= 0:
+                    symbol_shock_reason[sym_i] = ""
+        halt_left_before = int(trading_halt_left)
+        if trading_halt_left > 0 and not liquidation_triggered:
+            trading_halt_left = max(trading_halt_left - bars_elapsed, 0)
+        if halt_left_before > 0 and trading_halt_left == 0:
+            post_halt_cooldown_left = max(post_halt_cooldown_bars, 0)
+            post_halt_reentry_step = 0
+            last_halt_release_idx = idx
+        if post_halt_cooldown_left > 0 and trading_halt_left == 0:
+            post_halt_cooldown_left = max(post_halt_cooldown_left - bars_elapsed, 0)
+            post_halt_reentry_step += 1
+
+        peak_equity = max(peak_equity, float(equity))
+        if rolling_peak_window_bars is None:
+            signal_peak = peak_equity
+            peak_type = "absolute"
+        else:
+            rolling_peak_records.append((idx, float(equity)))
+            window_bars = int(rolling_peak_window_bars)
+            while rolling_peak_records and (idx - rolling_peak_records[0][0]) > window_bars:
+                rolling_peak_records.pop(0)
+            signal_peak = max((v for _, v in rolling_peak_records), default=float(equity))
+            peak_type = "rolling"
+        signal_peak = max(float(signal_peak), 1e-9)
+        drawdown_pre = max(0.0, min(1.0, 1.0 - (equity / signal_peak)))
+        max_dd_stage = len(dd_gross_mults) - 1
+        desired_dd_stage = 0
+        for i, thr in enumerate(dd_thresholds, start=1):
+            if drawdown_pre >= float(thr):
+                desired_dd_stage = i
+        desired_dd_stage = min(max(desired_dd_stage, 0), max_dd_stage)
+
+        if desired_dd_stage > dd_stage:
+            for lvl in range(dd_stage + 1, desired_dd_stage + 1):
+                dd_trigger_counts[f"stage_{lvl}"] = int(dd_trigger_counts.get(f"stage_{lvl}", 0)) + 1
+            stage_transitions_up += int(desired_dd_stage - dd_stage)
+            dd_stage = desired_dd_stage
+            stage_down_confirm_accum_bars = 0
+            reentry_ramp_active = False
+            if dd_stage >= max_dd_stage:
+                kill_switch_count += 1
+                if kill_switch_first_ts is None:
+                    kill_switch_first_ts = str(timestamps[idx])
+                kill_cooldown_left = max(int(kill_cooldown_bars), 0)
+        elif desired_dd_stage < dd_stage:
+            can_down = True
+            if dd_stage >= max_dd_stage and kill_cooldown_left > 0:
+                can_down = False
+            if can_down:
+                candidate_stage = dd_stage - 1
+                recover_idx = min(max(dd_stage - 1, 0), len(dd_recover_thresholds) - 1)
+                recover_thr = float(dd_recover_thresholds[recover_idx])
+                need_confirm = stage3_down_confirm_bars if dd_stage == 3 else stage_down_confirm_bars
+                if drawdown_pre <= recover_thr:
+                    stage_down_confirm_accum_bars += bars_elapsed
+                else:
+                    stage_down_confirm_accum_bars = 0
+                if stage_down_confirm_accum_bars >= need_confirm and candidate_stage >= desired_dd_stage:
+                    prev_mult = float(dd_mult_last)
+                    dd_stage = candidate_stage
+                    stage_transitions_down += 1
+                    stage_down_confirm_accum_bars = 0
+                    tgt_mult = float(dd_gross_mults[min(dd_stage, max_dd_stage)])
+                    if tgt_mult > prev_mult and reentry_ramp_steps > 1:
+                        reentry_ramp_active = True
+                        reentry_ramp_from = prev_mult
+                        reentry_ramp_to = tgt_mult
+                        reentry_ramp_progress = 0
+        else:
+            stage_down_confirm_accum_bars = 0
+
+        if dd_stage >= max_dd_stage:
+            kill_bars += bars_elapsed
+            if kill_cooldown_left > 0:
+                kill_cooldown_left = max(kill_cooldown_left - bars_elapsed, 0)
+
+        target_dd_mult = float(dd_gross_mults[min(dd_stage, max_dd_stage)])
+        if reentry_ramp_active:
+            reentry_ramp_progress += 1
+            frac = min(reentry_ramp_progress / max(reentry_ramp_steps, 1), 1.0)
+            dd_gross_mult = reentry_ramp_from + (reentry_ramp_to - reentry_ramp_from) * frac
+            if frac >= 1.0:
+                reentry_ramp_active = False
+        else:
+            dd_gross_mult = target_dd_mult
+        dd_mult_last = float(dd_gross_mult)
+        time_in_dd_stage[f"stage_{dd_stage}"] = int(time_in_dd_stage.get(f"stage_{dd_stage}", 0)) + bars_elapsed
+        if dd_stage == 3:
+            stage3_streak_bars += bars_elapsed
+            stage3_longest_streak_bars = max(stage3_longest_streak_bars, stage3_streak_bars)
+        else:
+            stage3_streak_bars = 0
+
+        # OFF->ON transition control: grace on OFF and phased re-entry on ON.
+        effective_scale = regime_scale
+        off_reduce_only = False
+        decay_factor = 0.0
+        if regime_scale <= 0.0:
+            off_bars += 1
+            on_bars = 0
+            regime_off_bars[regime_label] = int(regime_off_bars.get(regime_label, 0)) + 1
+            if off_bars <= max(params.off_grace_bars, 0):
+                effective_scale = max(prev_effective_scale, 0.0)
+                off_decay_progress = 0
+            else:
+                off_reduce_only = True
+                steps = max(int(gross_decay_steps), 1)
+                off_decay_progress = min(off_decay_progress + 1, steps)
+                decay_factor = max((steps - off_decay_progress) / steps, 0.0)
+                effective_scale = decay_factor
+                phased_progress = 0
+        else:
+            on_bars += 1
+            off_bars = 0
+            off_decay_progress = 0
+            steps = max(params.phased_entry_steps, 1)
+            if prev_effective_scale <= 0.0 and steps > 1:
+                phased_progress = 1
+                effective_scale = regime_scale * (phased_progress / steps)
+            elif 0 < phased_progress < steps:
+                phased_progress += 1
+                effective_scale = regime_scale * (phased_progress / steps)
+            else:
+                phased_progress = steps
+                effective_scale = regime_scale
+        if prev_effective_scale > 0.0 and effective_scale <= 0.0:
+            on_to_off_count += 1
+        elif prev_effective_scale <= 0.0 and effective_scale > 0.0:
+            off_to_on_count += 1
+
+        target_effective_scale = max(effective_scale * dd_gross_mult, 0.0)
+        if transition_smoother_enabled and post_halt_cooldown_left > 0 and trading_halt_left == 0:
+            post_steps = max(max(params.phased_entry_steps, 5), 1)
+            post_ramp = min(post_halt_reentry_step / max(post_steps, 1), 1.0)
+            post_cap_scale = (post_halt_max_gross * post_ramp) / max(params.gross_exposure, 1e-9)
+            target_effective_scale = min(target_effective_scale, max(post_cap_scale, 0.0))
+        if transition_smoother_enabled and liquidation_lookback_bars > 0:
+            lookback_start = idx - liquidation_lookback_bars
+            liquidation_indices = [x for x in liquidation_indices if x >= lookback_start]
+            if liquidation_indices:
+                liq_cap_scale = liquidation_lookback_max_gross / max(params.gross_exposure, 1e-9)
+                target_effective_scale = min(target_effective_scale, max(liq_cap_scale, 0.0))
+        if transition_smoother_enabled and not liquidation_triggered:
+            delta_scale = target_effective_scale - prev_effective_scale
+            if delta_scale > gross_step_up:
+                delta_scale = gross_step_up
+            elif delta_scale < -gross_step_down:
+                delta_scale = -gross_step_down
+            effective_scale = max(prev_effective_scale + delta_scale, 0.0)
+        else:
+            effective_scale = max(target_effective_scale, 0.0)
+        if off_reduce_only and transition_smoother_enabled:
+            if prev_effective_scale > 1e-9:
+                decay_factor = min(max(effective_scale / prev_effective_scale, 0.0), 1.0)
+            else:
+                decay_factor = 0.0
+
+        target_gross = float(params.gross_exposure * target_effective_scale)
+        applied_gross = float(params.gross_exposure * effective_scale)
+        gross_transition_mag = abs(applied_gross - float(params.gross_exposure * prev_effective_scale))
+        gross_transition_magnitude_sum += gross_transition_mag
+        gross_transition_max = max(gross_transition_max, gross_transition_mag)
+        gross_error = abs(target_gross - applied_gross)
+        gross_error_sum += gross_error
+        gross_error_max = max(gross_error_max, gross_error)
+        applied_gross_sum += applied_gross
+        applied_gross_sq_sum += applied_gross * applied_gross
+        applied_gross_count += 1
+        gross_exposure_time_sum += applied_gross * bars_elapsed
+        gross_rows.append(
+            {
+                "timestamp": str(timestamps[idx]),
+                "target_gross": target_gross,
+                "applied_gross": applied_gross,
+                "dd_stage": int(dd_stage),
+                "regime": regime_label,
+            }
         )
-        if target_status != "ok":
-            skip_reasons[target_status] = int(skip_reasons.get(target_status, 0)) + 1
-            if target_status in {"warmup", "insufficient_valid_symbols"}:
-                target_weights = np.zeros(s, dtype=float)
 
-        current_weights = np.zeros(s, dtype=float)
-        equity_abs = max(abs(equity), 1e-9)
-        current_weights = (qty * mark_prices) / equity_abs
+        dd_reduce_only = dd_stage >= max_dd_stage
+        if dd_reduce_only:
+            off_reduce_only = True
+        if liquidation_triggered:
+            dd_reduce_only = True
+            off_reduce_only = True
+        halt_reduce_only = False
+        if enable_liquidation and trading_halt_left > 0:
+            if float(np.sum(np.abs(current_weights))) > 1e-9:
+                halt_reduce_only = True
+                off_reduce_only = True
+        turnover_threshold = float((regime_turnover_threshold_map or {}).get(regime_label, params.turnover_threshold))
+        if dd_stage >= 2:
+            turnover_threshold *= dd_turnover_threshold_mult
+        if transition_smoother_enabled and (dd_stage >= 2 or "high_vol" in regime_label):
+            turnover_threshold *= 2.0
+
+        if liquidation_triggered:
+            target_weights = np.zeros(s, dtype=float)
+            long_idx = np.asarray([], dtype=int)
+            short_idx = np.asarray([], dtype=int)
+            target_status = "liquidation_reduce_only"
+        elif dd_reduce_only:
+            target_weights = np.zeros(s, dtype=float)
+            long_idx = np.asarray([], dtype=int)
+            short_idx = np.asarray([], dtype=int)
+            target_status = "dd_kill_reduce_only"
+        elif halt_reduce_only:
+            target_weights = np.zeros(s, dtype=float)
+            long_idx = np.asarray([], dtype=int)
+            short_idx = np.asarray([], dtype=int)
+            target_status = "trading_halt_reduce_only"
+        elif enable_liquidation and trading_halt_left > 0:
+            target_weights = current_weights.copy()
+            long_idx = np.where(target_weights > 1e-12)[0].astype(int)
+            short_idx = np.where(target_weights < -1e-12)[0].astype(int)
+            target_status = "trading_halt"
+        elif off_reduce_only:
+            target_weights = current_weights * decay_factor
+            long_idx = np.where(target_weights > 1e-12)[0].astype(int)
+            short_idx = np.where(target_weights < -1e-12)[0].astype(int)
+            target_status = "off_reduce_only"
+        else:
+            target_weights, long_idx, short_idx, target_status = _portfolio_target_weights(
+                close=close,
+                open_=open_,
+                high=high,
+                low=low,
+                idx=idx,
+                lookback_bars=params.lookback_bars,
+                vol_lookback=params.vol_lookback,
+                k=params.k,
+                rank_buffer=params.rank_buffer,
+                prev_long_idx=prev_long_idx,
+                prev_short_idx=prev_short_idx,
+                gross_exposure=params.gross_exposure * effective_scale,
+                signal_model=params.signal_model,
+                lookback_score_mode=lookback_score_mode,  # type: ignore[arg-type]
+            )
+            if target_status != "ok":
+                skip_reasons[target_status] = int(skip_reasons.get(target_status, 0)) + 1
+                if target_status in {"warmup", "insufficient_valid_symbols"}:
+                    target_weights = np.zeros(s, dtype=float)
+        entry_block_stage = max(int(disable_new_entry_stage), 1)
+        if disable_new_entry_when_dd and dd_stage >= entry_block_stage and target_weights.size == current_weights.size and not dd_reduce_only:
+            clipped = target_weights.copy()
+            for sym_i in range(s):
+                cw = float(current_weights[sym_i])
+                tw = float(clipped[sym_i])
+                if abs(cw) <= 1e-9:
+                    clipped[sym_i] = 0.0
+                    continue
+                if cw * tw < 0.0:
+                    clipped[sym_i] = 0.0
+                    continue
+                if abs(tw) > abs(cw):
+                    clipped[sym_i] = cw
+            target_weights = clipped
+
+        raw_weights = target_weights.copy()
+        capped_weights = target_weights.copy()
+        atr_ratio_vals = np.full(s, np.nan, dtype=float)
+        shock_flags_vals = [""] * s
+        if idx >= 1:
+            prev_px = np.maximum(close[idx - 1], 1e-12)
+            ret_1bar = (close[idx] / prev_px) - 1.0
+        else:
+            ret_1bar = np.zeros(s, dtype=float)
+        atr_short = np.full(s, np.nan, dtype=float)
+        atr_long = np.full(s, np.nan, dtype=float)
+        if idx >= 24:
+            atr_short = np.nanmean(atr[idx - 24 + 1 : idx + 1], axis=0)
+        if idx >= 24 * 14:
+            atr_long = np.nanmean(atr[idx - (24 * 14) + 1 : idx + 1], axis=0)
+        valid_atr_ratio = np.isfinite(atr_short) & np.isfinite(atr_long) & (atr_long > 1e-9)
+        atr_ratio_vals[valid_atr_ratio] = atr_short[valid_atr_ratio] / atr_long[valid_atr_ratio]
+        any_shock_active_this_bar = False
+        shocked_symbol_count_this_bar = 0
+        for sym_i, symbol in enumerate(market.symbols):
+            flags: list[str] = []
+            applied_mult = 1.0
+            missing_data = (not math.isfinite(float(close[idx, sym_i]))) or float(close[idx, sym_i]) <= 1e-9
+            if not missing_data and (not math.isfinite(float(open_[idx, sym_i])) or float(open_[idx, sym_i]) <= 1e-9):
+                missing_data = True
+            if missing_data:
+                flags.append("missing_data")
+            if enable_symbol_shock_filters:
+                ratio_i = float(atr_ratio_vals[sym_i]) if math.isfinite(float(atr_ratio_vals[sym_i])) else float("nan")
+                ret_i = float(ret_1bar[sym_i]) if math.isfinite(float(ret_1bar[sym_i])) else 0.0
+                trigger_reason = ""
+                if math.isfinite(ratio_i) and ratio_i >= atr_shock_threshold and atr_shock_threshold > 0.0:
+                    trigger_reason = "atr_shock"
+                if abs(ret_i) >= gap_shock_threshold and gap_shock_threshold > 0.0:
+                    trigger_reason = "gap_shock"
+                if trigger_reason:
+                    symbol_shock_cooldown_left[sym_i] = max(int(symbol_shock_cooldown_left[sym_i]), int(shock_cooldown_bars))
+                    symbol_shock_reason[sym_i] = trigger_reason
+                if int(symbol_shock_cooldown_left[sym_i]) > 0:
+                    cool_reason = str(symbol_shock_reason[sym_i]) if str(symbol_shock_reason[sym_i]) else "atr_shock"
+                    any_shock_active_this_bar = True
+                    shocked_symbol_count_this_bar += 1
+                    flags.append(cool_reason)
+                    if shock_mode == "exclude":
+                        applied_mult = 0.0
+                    else:
+                        applied_mult = shock_weight_mult_gap if cool_reason == "gap_shock" else shock_weight_mult_atr
+                    shocked_counts_by_reason[cool_reason] = int(shocked_counts_by_reason.get(cool_reason, 0)) + 1
+                    shocked_symbol_counts[symbol] = int(shocked_symbol_counts.get(symbol, 0)) + 1
+                    shocked_mult_sum_by_reason[cool_reason] = float(shocked_mult_sum_by_reason.get(cool_reason, 0.0)) + float(applied_mult)
+                    shocked_mult_count_by_reason[cool_reason] = int(shocked_mult_count_by_reason.get(cool_reason, 0)) + 1
+                    excluded_rows.append(
+                        {
+                            "timestamp": str(timestamps[idx]),
+                            "symbol": symbol,
+                            "reason": cool_reason,
+                            "applied_mult": float(applied_mult),
+                            "cooldown_remaining": int(symbol_shock_cooldown_left[sym_i]),
+                        }
+                    )
+            if "missing_data" in flags:
+                applied_mult = 0.0
+                shocked_counts_by_reason["missing_data"] = int(shocked_counts_by_reason.get("missing_data", 0)) + 1
+                shocked_symbol_counts[symbol] = int(shocked_symbol_counts.get(symbol, 0)) + 1
+                shocked_mult_sum_by_reason["missing_data"] = float(shocked_mult_sum_by_reason.get("missing_data", 0.0))
+                shocked_mult_count_by_reason["missing_data"] = int(shocked_mult_count_by_reason.get("missing_data", 0)) + 1
+                excluded_rows.append(
+                    {
+                        "timestamp": str(timestamps[idx]),
+                        "symbol": symbol,
+                        "reason": "missing_data",
+                        "applied_mult": float(applied_mult),
+                        "cooldown_remaining": int(symbol_shock_cooldown_left[sym_i]) if enable_symbol_shock_filters else 0,
+                    }
+                )
+            capped_weights[sym_i] = float(capped_weights[sym_i]) * float(applied_mult)
+            if applied_mult <= 1e-12 and flags:
+                for reason in flags:
+                    if reason in excluded_counts_by_reason:
+                        excluded_counts_by_reason[reason] = int(excluded_counts_by_reason.get(reason, 0)) + 1
+            cap_hit = False
+            if max_abs_weight_per_symbol > 0.0 and abs(float(capped_weights[sym_i])) > max_abs_weight_per_symbol:
+                capped_weights[sym_i] = math.copysign(max_abs_weight_per_symbol, float(capped_weights[sym_i]))
+                cap_hit = True
+                cap_hit_counts_by_symbol[symbol] = int(cap_hit_counts_by_symbol.get(symbol, 0)) + 1
+            flags_str = "|".join(sorted(set(flags)))
+            shock_flags_vals[sym_i] = flags_str
+            risk_cap_rows.append(
+                {
+                    "timestamp": str(timestamps[idx]),
+                    "symbol": symbol,
+                    "raw_weight": float(raw_weights[sym_i]),
+                    "capped_weight": float(capped_weights[sym_i]),
+                    "cap_hit": bool(cap_hit),
+                    "atr_ratio": float(atr_ratio_vals[sym_i]) if math.isfinite(float(atr_ratio_vals[sym_i])) else np.nan,
+                    "shock_flags": flags_str,
+                }
+            )
+        if any_shock_active_this_bar:
+            any_shock_active_bar_count += 1
+        shock_fraction_this_bar = float(shocked_symbol_count_this_bar / max(s, 1))
+        shock_active_this_bar = bool(shock_fraction_this_bar >= shock_freeze_min_fraction)
+        if shock_active_this_bar:
+            shock_active_bars_count += 1
+        target_weights = capped_weights
+        long_idx = np.where(target_weights > 1e-12)[0].astype(int)
+        short_idx = np.where(target_weights < -1e-12)[0].astype(int)
+
         turnover_ratio = float(np.sum(np.abs(target_weights - current_weights)))
-        rebalance_applied = turnover_ratio >= max(turnover_threshold, 0.0)
+        threshold = max(turnover_threshold, 0.0)
+        force_rebalance = drift_threshold is not None and turnover_ratio >= max(float(drift_threshold), 0.0)
+        force_liquidation_rebalance = bool(liquidation_triggered or halt_reduce_only)
+        rebalance_applied = (turnover_ratio >= threshold) or bool(force_rebalance) or force_liquidation_rebalance
+        rebalance_skipped_due_to_shock = False
+        if force_rebalance and turnover_ratio < threshold:
+            drift_force_count += 1
+        dd_rebalance_effective = dd_rebalance_mult
+        if transition_smoother_enabled and dd_rebalance_effective is None and (dd_stage >= 2 or "high_vol" in regime_label):
+            dd_rebalance_effective = 2.0
+        if dd_stage >= 2 and dd_rebalance_effective is not None and not force_liquidation_rebalance:
+            dd_stride = max(int(round(float(dd_rebalance_effective))), 1)
+            dd_rebalance_counter += 1
+            if dd_rebalance_counter % dd_stride != 0:
+                rebalance_applied = False
+                target_weights = current_weights.copy()
+                skip_reasons["dd_rebalance_sparsified"] = int(skip_reasons.get("dd_rebalance_sparsified", 0)) + 1
+        else:
+            dd_rebalance_counter = 0
+        safety_rebalance = bool(force_liquidation_rebalance or dd_reduce_only or halt_reduce_only)
+        if (
+            shock_freeze_rebalance
+            and shock_active_this_bar
+            and rebalance_applied
+            and not safety_rebalance
+        ):
+            rebalance_applied = False
+            target_weights = current_weights.copy()
+            rebalance_skipped_due_to_shock = True
+            rebalance_skipped_due_to_shock_count += 1
         if not rebalance_applied:
             target_weights = current_weights.copy()
-            skip_reasons["turnover_below_threshold"] = int(skip_reasons.get("turnover_below_threshold", 0)) + 1
+            if rebalance_skipped_due_to_shock:
+                skip_reasons["shock_rebalance_freeze"] = int(skip_reasons.get("shock_rebalance_freeze", 0)) + 1
+            elif enable_liquidation and trading_halt_left > 0:
+                skip_reasons["trading_halt"] = int(skip_reasons.get("trading_halt", 0)) + 1
+            else:
+                skip_reasons["turnover_below_threshold"] = int(skip_reasons.get("turnover_below_threshold", 0)) + 1
 
         exec_idx = min(idx + 1 + max(int(cost_cfg.latency_bars), 0), n - 1)
         delta_qty = np.zeros(s, dtype=float)
+        target_qty_ref = qty.copy()
         tradable_equity = max(equity, 0.0)
-        if tradable_equity > 1e-9 and regime_scale > 0.0:
+        backlog_ratio_pre = float(prev_backlog_notional / max(tradable_equity, 1e-9)) if tradable_equity > 0 else 0.0
+        cap_used = _resolve_turnover_cap_used(
+            cap_mode=cap_mode,
+            backlog_ratio=backlog_ratio_pre,
+            regime_label=regime_label,
+            base_cap=effective_base_cap,
+            cap_min=cap_min,
+            cap_max=cap_max,
+            backlog_thresholds=backlog_thresholds,
+            cap_steps=cap_steps,
+            high_vol_cap_max=high_vol_cap_max,
+        )
+        if cap_used is not None:
+            cap_used_sum += cap_used
+            cap_used_count += 1
+            cap_key = f"{cap_used:.2f}"
+            cap_histogram[cap_key] = int(cap_histogram.get(cap_key, 0)) + 1
+        else:
+            cap_histogram["off"] = int(cap_histogram.get("off", 0)) + 1
+        planned_turnover_notional = 0.0
+        turnover_cap_notional = -1.0
+        turnover_executed_fraction = 0.0
+        if tradable_equity > 1e-9:
             target_notional = target_weights * tradable_equity
             base_exec_price = np.asarray(open_[exec_idx], dtype=float)
             invalid_px = (~np.isfinite(base_exec_price)) | (base_exec_price <= 1e-9)
@@ -1061,17 +1805,48 @@ def _simulate_portfolio(
                 skip_reasons["invalid_exec_price"] = int(skip_reasons.get("invalid_exec_price", 0)) + int(np.sum(invalid_px))
             base_exec_price = np.where(invalid_px, 1.0, base_exec_price)
             target_qty = target_notional / base_exec_price
-            delta_qty = target_qty - qty
-            est_turnover_notional = float(np.sum(np.abs(delta_qty * base_exec_price)))
-            turnover_cap = max(max_notional_to_equity_mult, 1.0) * tradable_equity
-            if est_turnover_notional > max(turnover_cap, 1e-9):
-                scale = turnover_cap / max(est_turnover_notional, 1e-9)
-                delta_qty = delta_qty * max(scale, 0.0)
-                skip_reasons["turnover_cap_scaled"] = int(skip_reasons.get("turnover_cap_scaled", 0)) + 1
+            target_qty_ref = target_qty.copy()
+            delta_qty_full = target_qty - qty
+            planned_turnover_notional = float(np.sum(np.abs(delta_qty_full * base_exec_price)))
+            delta_qty = delta_qty_full.copy()
+            if cap_used is not None:
+                turnover_cap_notional = max(float(cap_used), 0.0) * tradable_equity
+                if planned_turnover_notional > max(turnover_cap_notional, 1e-9):
+                    scale = turnover_cap_notional / max(planned_turnover_notional, 1e-9)
+                    delta_qty = delta_qty_full * max(scale, 0.0)
+                    cap_hit_count += 1
+                    skip_reasons["turnover_cap_scaled"] = int(skip_reasons.get("turnover_cap_scaled", 0)) + 1
+            if off_reduce_only:
+                # OFF regime unwind should only reduce existing exposure, not rotate into new risk.
+                mask_increase = np.abs(qty + delta_qty) > np.abs(qty) + 1e-12
+                delta_qty[mask_increase] = 0.0
+                if np.any(mask_increase):
+                    skip_reasons["off_reduce_only_clip"] = int(skip_reasons.get("off_reduce_only_clip", 0)) + int(np.sum(mask_increase))
         else:
             delta_qty = -qty
+            if np.any(np.abs(delta_qty) > 0.0):
+                planned_turnover_notional = float(np.sum(np.abs(delta_qty * np.maximum(open_[exec_idx], 1e-9))))
+                target_qty_ref = np.zeros(s, dtype=float)
+                turnover_executed_fraction = 1.0
             if tradable_equity <= 1e-9:
-                skip_reasons["equity_zero_or_negative"] = int(skip_reasons.get("equity_zero_or_negative", 0)) + 1
+                if not enable_liquidation:
+                    skip_reasons["equity_zero_or_negative"] = int(skip_reasons.get("equity_zero_or_negative", 0)) + 1
+
+        if rebalance_applied and planned_turnover_notional > 0.0 and tradable_equity > 0.0:
+            taker_fee_rate = _portfolio_fee_rate(order_model="market", base_config=base_config, fee_multiplier=cost_cfg.fee_multiplier)
+            slip_frac_est = max(float(cost_cfg.slippage_bps), 0.0) / 10_000.0
+            if cost_cfg.slippage_mode in {"atr", "mixed"}:
+                slip_frac_est += max(float(cost_cfg.atr_slippage_mult), 0.0) * 0.01
+            penalty_frac_est = max(float(cost_cfg.limit_unfilled_penalty_bps), 0.0) / 10_000.0 if cost_cfg.order_model == "limit" else 0.0
+            conservative_cost_est = planned_turnover_notional * (taker_fee_rate + slip_frac_est + penalty_frac_est)
+            cost_skip_ratio = float(skip_trades_if_cost_exceeds_equity_ratio)
+            if dd_stage >= 2 or "high_vol" in regime_label:
+                cost_skip_ratio *= 0.75
+            if cost_skip_ratio > 0.0 and conservative_cost_est > (tradable_equity * cost_skip_ratio):
+                delta_qty[:] = 0.0
+                planned_turnover_notional = 0.0
+                target_qty_ref = qty.copy()
+                skip_reasons["insufficient_equity_for_cost"] = int(skip_reasons.get("insufficient_equity_for_cost", 0)) + 1
 
         scenario_fee = 0.0
         scenario_slip = 0.0
@@ -1079,25 +1854,58 @@ def _simulate_portfolio(
         turnover_notional = 0.0
         trades_this_bar = 0
         bar_blocked = False
-        bar_cost_budget = max(max_cost_ratio_per_bar, 0.0) * max(tradable_equity, 0.0)
+        equity_frac = max(min(tradable_equity / max(initial_equity, 1e-9), 1.0), 0.0)
+        dynamic_cost_ratio = min(max(max_cost_ratio_per_bar, 0.0), 0.02 * max(equity_frac, 0.1))
+        bar_cost_budget = dynamic_cost_ratio * max(tradable_equity, 0.0)
 
+        trade_legs: list[tuple[int, float, bool]] = []
         for sym_i in range(s):
             dqty = float(delta_qty[sym_i])
             if (not math.isfinite(dqty)) or abs(dqty) <= 1e-9:
                 continue
+            current_qty = float(qty[sym_i])
+            target_qty_sym = current_qty + dqty
+            if abs(current_qty) > 1e-9 and abs(target_qty_sym) > 1e-9 and (current_qty * target_qty_sym) < 0:
+                close_leg = -current_qty
+                open_leg = target_qty_sym
+                if abs(close_leg) > 1e-9:
+                    trade_legs.append((sym_i, close_leg, True))
+                if abs(open_leg) > 1e-9:
+                    trade_legs.append((sym_i, open_leg, False))
+            else:
+                is_reduce = abs(target_qty_sym) < abs(current_qty) - 1e-12
+                trade_legs.append((sym_i, dqty, bool(is_reduce)))
+        reduce_first_candidates += sum(1 for _, _, is_reduce in trade_legs if is_reduce)
+        trade_legs.sort(key=lambda x: (0 if x[2] else 1, -abs(x[1])))
+
+        for sym_i, planned_dqty, is_reduce in trade_legs:
+            dqty = float(planned_dqty)
+            if (not math.isfinite(dqty)) or abs(dqty) <= 1e-12:
+                continue
             side_buy = dqty > 0
             side_sign = 1.0 if side_buy else -1.0
+            base_price = float(open_[exec_idx, sym_i])
+            if (not math.isfinite(base_price)) or base_price <= 1e-9:
+                skip_reasons["invalid_base_price"] = int(skip_reasons.get("invalid_base_price", 0)) + 1
+                skipped_trade_count += 1
+                continue
+            if turnover_cap_notional > 0:
+                remaining_notional = turnover_cap_notional - turnover_notional
+                if remaining_notional <= 1e-9:
+                    skip_reasons["turnover_cap_block"] = int(skip_reasons.get("turnover_cap_block", 0)) + 1
+                    break
+                max_qty_by_cap = remaining_notional / max(base_price, 1e-9)
+                if abs(dqty) > max_qty_by_cap:
+                    dqty = math.copysign(max_qty_by_cap, dqty)
+                    if abs(dqty) <= 1e-12:
+                        skip_reasons["turnover_cap_block"] = int(skip_reasons.get("turnover_cap_block", 0)) + 1
+                        continue
 
             fill_price = 0.0
             fee_rate = 0.0
             penalty = 0.0
             slippage_cost = 0.0
             abs_qty = abs(dqty)
-            base_price = float(open_[exec_idx, sym_i])
-            if (not math.isfinite(base_price)) or base_price <= 1e-9:
-                skip_reasons["invalid_base_price"] = int(skip_reasons.get("invalid_base_price", 0)) + 1
-                skipped_trade_count += 1
-                continue
             atr_value = float(atr[exec_idx, sym_i])
             slippage_frac = _portfolio_slippage_fraction(
                 base_price=base_price,
@@ -1158,6 +1966,12 @@ def _simulate_portfolio(
                 skip_reasons["invalid_notional"] = int(skip_reasons.get("invalid_notional", 0)) + 1
                 skipped_trade_count += 1
                 continue
+            if penalty > 0.0 and tradable_equity > 0.0 and tradable_equity <= (initial_equity * 0.10):
+                max_penalty = tradable_equity * max(skip_trades_if_cost_exceeds_equity_ratio * 0.5, 0.0)
+                if penalty > max_penalty:
+                    skip_reasons["penalty_block_low_equity"] = int(skip_reasons.get("penalty_block_low_equity", 0)) + 1
+                    skipped_trade_count += 1
+                    continue
             fee = notional * fee_rate
             est_cost = fee + slippage_cost + penalty
             if bar_cost_budget > 0 and (scenario_fee + scenario_slip + scenario_penalty + est_cost) > bar_cost_budget:
@@ -1165,7 +1979,6 @@ def _simulate_portfolio(
                 skipped_trade_count += 1
                 bar_blocked = True
                 continue
-            turnover_notional += notional
 
             if side_buy:
                 cash -= notional + fee + penalty
@@ -1174,7 +1987,11 @@ def _simulate_portfolio(
             qty[sym_i] += dqty
             trade_count += 1
             trades_this_bar += 1
+            reduce_first_total_execs += 1
+            if is_reduce:
+                reduce_first_execs += 1
 
+            turnover_notional += notional
             scenario_fee += fee
             scenario_slip += slippage_cost
             scenario_penalty += penalty
@@ -1187,8 +2004,64 @@ def _simulate_portfolio(
         cost_penalty_total += scenario_penalty
 
         post_equity = float(cash + np.dot(qty, close[idx]))
+        px_ref = np.asarray(open_[exec_idx], dtype=float)
+        px_ref = np.where((~np.isfinite(px_ref)) | (px_ref <= 1e-9), 1.0, px_ref)
+        backlog_notional = float(np.sum(np.abs((target_qty_ref - qty) * px_ref)))
+        backlog_notional_sum += backlog_notional
+        backlog_notional_max = max(backlog_notional_max, backlog_notional)
+        backlog_ratio = float(backlog_notional / max(post_equity if math.isfinite(post_equity) else tradable_equity, 1e-9))
+        backlog_ratio_sum += backlog_ratio
+        backlog_ratio_max = max(backlog_ratio_max, backlog_ratio)
+        prev_backlog_notional = backlog_notional
+        if planned_turnover_notional > 1e-9:
+            turnover_executed_fraction = float(turnover_notional / max(planned_turnover_notional, 1e-9))
+            turnover_executed_fraction = min(max(turnover_executed_fraction, 0.0), 1.0)
+            executed_fraction_sum += turnover_executed_fraction
+            executed_fraction_count += 1
         anomaly_reason = None
-        if post_equity <= 0.0 or not math.isfinite(post_equity):
+        liquidation_breach = (not math.isfinite(post_equity)) or (post_equity < (equity_floor - 1e-9))
+        liquidation_forced = liquidation_triggered and (turnover_notional > 0.0 or had_open_position)
+        if enable_liquidation and (liquidation_breach or liquidation_forced):
+            if scenario_fee >= scenario_slip and scenario_fee >= scenario_penalty:
+                liquid_reason = "negative_equity_due_to_fee"
+            elif scenario_slip >= scenario_fee and scenario_slip >= scenario_penalty:
+                liquid_reason = "negative_equity_due_to_slippage"
+            elif scenario_penalty >= scenario_fee and scenario_penalty >= scenario_slip:
+                liquid_reason = "negative_equity_due_to_penalty"
+            else:
+                liquid_reason = "negative_equity_due_to_other"
+            if gross_transition_mag > 0.05:
+                liquid_reason = "negative_equity_due_to_gross_transition"
+            elif cap_hit_count > 0 and backlog_notional > max(tradable_equity, 1e-9):
+                liquid_reason = "negative_equity_due_to_backlog_execution"
+            elif turnover_notional > 0.0 and (scenario_slip / max(turnover_notional, 1e-9)) > 0.05:
+                liquid_reason = "negative_equity_due_to_price_gap"
+            liquidation_reason_counts[liquid_reason] = int(liquidation_reason_counts.get(liquid_reason, 0)) + 1
+            liquidation_rows.append(
+                {
+                    "timestamp": str(timestamps[idx]),
+                    "equity_before": float(equity),
+                    "equity_after": float(max(post_equity, equity_floor)),
+                    "gross": float(np.sum(np.abs(current_weights_post))) if "current_weights_post" in locals() else float(np.sum(np.abs(current_weights))),
+                    "dd_stage": int(dd_stage),
+                    "regime": regime_label,
+                    "turnover_notional": float(turnover_notional),
+                    "fee": float(scenario_fee),
+                    "slippage": float(scenario_slip),
+                    "penalty": float(scenario_penalty),
+                    "reason": liquid_reason,
+                }
+            )
+            post_equity = max(float(post_equity) if math.isfinite(post_equity) else equity_floor, equity_floor)
+            qty[:] = 0.0
+            cash = post_equity
+            trading_halt_left = max(trading_halt_left, trading_halt_bars)
+            liquidation_indices.append(idx)
+            if last_halt_release_idx is not None and post_halt_cooldown_bars > 0:
+                if (idx - last_halt_release_idx) <= post_halt_cooldown_bars:
+                    liquidation_after_halt_count += 1
+            anomaly_reason = "liquidation_event"
+        elif post_equity <= 0.0 or not math.isfinite(post_equity):
             post_equity = 0.0
             qty[:] = 0.0
             cash = 0.0
@@ -1224,6 +2097,16 @@ def _simulate_portfolio(
             rebalance_execs += 1
             prev_long_idx = set(int(x) for x in long_idx.tolist())
             prev_short_idx = set(int(x) for x in short_idx.tolist())
+            if abs(effective_scale - prev_effective_scale) > 1e-9:
+                gross_change_turnover += turnover_notional
+        prev_effective_scale = effective_scale
+        peak_equity = max(peak_equity, float(post_equity))
+        signal_peak_post = max(float(signal_peak), 1e-9)
+        drawdown_post = max(0.0, min(1.0, 1.0 - (post_equity / signal_peak_post)))
+        stage_key = f"stage_{dd_stage}"
+        effective_gross_now = float(params.gross_exposure * effective_scale)
+        gross_sum_by_stage[stage_key] = float(gross_sum_by_stage.get(stage_key, 0.0)) + effective_gross_now
+        gross_cnt_by_stage[stage_key] = int(gross_cnt_by_stage.get(stage_key, 0)) + 1
         equity_points.append(
             {
                 "timestamp": str(timestamps[idx]),
@@ -1235,16 +2118,37 @@ def _simulate_portfolio(
                 "regime": regime_label,
             }
         )
+        dd_rows.append(
+            {
+                "timestamp": str(timestamps[idx]),
+                "equity": float(post_equity),
+                "peak_equity": float(peak_equity),
+                "rolling_peak": float(signal_peak),
+                "peak_type": peak_type,
+                "drawdown": float(drawdown_post),
+                "dd_stage": int(dd_stage),
+                "effective_gross": effective_gross_now,
+                "regime": regime_label,
+            }
+        )
         turnover_rows.append(
             {
                 "timestamp": str(timestamps[idx]),
                 "turnover_ratio": turnover_ratio,
                 "turnover_notional": turnover_notional,
+                "turnover_cap_notional": turnover_cap_notional,
+                "turnover_executed_fraction": turnover_executed_fraction,
+                "backlog_notional": backlog_notional,
+                "backlog_ratio": backlog_ratio,
+                "cap_used": cap_used if cap_used is not None else -1.0,
                 "rebalance_applied": bool(trades_this_bar > 0),
                 "regime": regime_label,
                 "skip_reason": anomaly_reason or ("executed" if trades_this_bar > 0 else "no_execution"),
                 "turnover_threshold_used": turnover_threshold,
+                "force_rebalance": bool(force_rebalance),
                 "trades_this_bar": trades_this_bar,
+                "regime_scale": effective_scale,
+                "rebalance_skipped_due_to_shock": bool(rebalance_skipped_due_to_shock),
             }
         )
         cost_rows.append(
@@ -1273,7 +2177,10 @@ def _simulate_portfolio(
             )
 
     final_equity = float(cash + np.dot(qty, close[-1]))
-    final_equity = max(final_equity, 0.0)
+    if enable_liquidation:
+        final_equity = max(final_equity, equity_floor)
+    else:
+        final_equity = max(final_equity, 0.0)
     if not math.isfinite(final_equity):
         final_equity = 0.0
     equity_points.append(
@@ -1291,9 +2198,35 @@ def _simulate_portfolio(
         interval_pnls.append(final_equity - prev_rebalance_equity)
 
     equity_df = pd.DataFrame(equity_points)
+    dd_df = pd.DataFrame(dd_rows)
+    gross_df = pd.DataFrame(gross_rows)
+    excluded_df = pd.DataFrame(
+        excluded_rows,
+        columns=["timestamp", "symbol", "reason", "applied_mult", "cooldown_remaining"],
+    )
+    risk_cap_df = pd.DataFrame(
+        risk_cap_rows,
+        columns=["timestamp", "symbol", "raw_weight", "capped_weight", "cap_hit", "atr_ratio", "shock_flags"],
+    )
     turnover_df = pd.DataFrame(turnover_rows)
     cost_df = pd.DataFrame(cost_rows)
     pos_df = pd.DataFrame(position_rows)
+    liquidation_df = pd.DataFrame(
+        liquidation_rows,
+        columns=[
+            "timestamp",
+            "equity_before",
+            "equity_after",
+            "gross",
+            "dd_stage",
+            "regime",
+            "turnover_notional",
+            "fee",
+            "slippage",
+            "penalty",
+            "reason",
+        ],
+    )
 
     equity_arr = equity_df["equity"].to_numpy(dtype=float) if not equity_df.empty else np.asarray([base_config.initial_equity], dtype=float)
     equity_arr = np.nan_to_num(equity_arr, nan=0.0, posinf=0.0, neginf=0.0)
@@ -1313,6 +2246,7 @@ def _simulate_portfolio(
     avg_turn_attempt = float(turnover_df["turnover_ratio"].mean()) if not turnover_df.empty else 0.0
     exec_turn_df = turnover_df[turnover_df["rebalance_applied"] == True] if not turnover_df.empty else pd.DataFrame()
     avg_turn_exec = float(exec_turn_df["turnover_ratio"].mean()) if not exec_turn_df.empty else 0.0
+    fee_cost_per_gross_time = float(cost_fee_total / max(gross_exposure_time_sum, 1e-9))
 
     metrics: dict[str, float] = {
         "final_equity": final_equity,
@@ -1332,10 +2266,39 @@ def _simulate_portfolio(
         "fill_rate": float(fill_count / max(fill_count + reject_count, 1)),
         "reject_rate": float(reject_count / max(fill_count + reject_count, 1)),
         "skipped_trade_count": float(skipped_trade_count),
+        "off_to_on_count": float(off_to_on_count),
+        "on_to_off_count": float(on_to_off_count),
+        "gross_change_turnover": float(gross_change_turnover),
         "cost_fee_total": cost_fee_total,
         "cost_slippage_total": cost_slippage_total,
         "cost_penalty_total": cost_penalty_total,
         "cost_total": cost_fee_total + cost_slippage_total + cost_penalty_total,
+        "gross_exposure_time": float(gross_exposure_time_sum),
+        "fee_cost_per_gross_time": fee_cost_per_gross_time,
+        "cap_hit_count": float(cap_hit_count),
+        "avg_executed_fraction": float(executed_fraction_sum / max(executed_fraction_count, 1)),
+        "avg_backlog_notional": float(backlog_notional_sum / max(rebalance_attempts, 1)),
+        "max_backlog_notional": float(backlog_notional_max),
+        "avg_backlog_ratio": float(backlog_ratio_sum / max(rebalance_attempts, 1)),
+        "max_backlog_ratio": float(backlog_ratio_max),
+        "avg_cap_used": float(cap_used_sum / max(cap_used_count, 1)),
+        "reduce_first_execution_ratio": float(reduce_first_execs / max(reduce_first_total_execs, 1)),
+        "equity_zero_or_negative_count": float(skip_reasons.get("equity_zero_or_negative", 0)),
+        "drift_force_count": float(drift_force_count),
+        "kill_switch_events": float(kill_switch_count),
+        "kill_switch_total_bars": float(kill_bars),
+        "stage_3_share": float(time_in_dd_stage.get("stage_3", 0) / max(sum(time_in_dd_stage.values()), 1)),
+        "stage_3_longest_streak_bars": float(stage3_longest_streak_bars),
+        "stage_transitions_up": float(stage_transitions_up),
+        "stage_transitions_down": float(stage_transitions_down),
+        "liquidation_count": float(len(liquidation_df)),
+        "rebalance_skipped_due_to_shock_count": float(rebalance_skipped_due_to_shock_count),
+        "rebalance_skipped_due_to_shock_ratio": float(rebalance_skipped_due_to_shock_count / max(rebalance_attempts, 1)),
+        "shock_active_bars_count": float(shock_active_bars_count),
+    }
+    regime_off_ratio = {
+        rg: (float(regime_off_bars.get(rg, 0)) / max(float(regime_total_bars.get(rg, 0)), 1.0))
+        for rg in sorted(regime_total_bars.keys())
     }
     diagnostics = {
         "total_bars": int(n),
@@ -1343,17 +2306,142 @@ def _simulate_portfolio(
         "rebalance_step_bars": int(params.rebalance_bars),
         "rebalance_attempts": int(rebalance_attempts),
         "rebalance_execs": int(rebalance_execs),
+        "off_to_on_count": int(off_to_on_count),
+        "on_to_off_count": int(on_to_off_count),
+        "gross_change_turnover_contrib": float(gross_change_turnover),
+        "regime_off_ratio": regime_off_ratio,
         "skip_reasons": {k: int(v) for k, v in sorted(skip_reasons.items())},
         "anomaly_events": int(len(debug_events)),
         "max_cost_ratio_per_bar": float(max_cost_ratio_per_bar),
+        "cap_mode": str(cap_mode),
+        "base_cap": float(effective_base_cap),
+        "cap_min": float(cap_min),
+        "cap_max": float(cap_max),
+        "backlog_thresholds": [float(x) for x in backlog_thresholds],
+        "cap_steps": [float(x) for x in cap_steps],
+        "high_vol_cap_max": float(high_vol_cap_max),
+        "rolling_peak_window_bars": None if rolling_peak_window_bars is None else int(rolling_peak_window_bars),
+        "peak_type": "absolute" if rolling_peak_window_bars is None else "rolling",
+        "stage_down_confirm_bars": int(stage_down_confirm_bars),
+        "stage3_down_confirm_bars": int(stage3_down_confirm_bars),
+        "reentry_ramp_steps": int(reentry_ramp_steps),
+        "disable_new_entry_stage": int(disable_new_entry_stage),
+        "dd_turnover_threshold_mult": float(dd_turnover_threshold_mult),
+        "dd_rebalance_mult": None if dd_rebalance_mult is None else float(dd_rebalance_mult),
+        "max_turnover_notional_to_equity": None if max_turnover_notional_to_equity is None else float(max_turnover_notional_to_equity),
+        "drift_threshold": None if drift_threshold is None else float(drift_threshold),
+        "gross_decay_steps": int(max(int(gross_decay_steps), 1)),
         "max_notional_to_equity_mult": float(max_notional_to_equity_mult),
+        "enable_liquidation": bool(enable_liquidation),
+        "equity_floor_ratio": float(equity_floor_ratio),
+        "equity_floor": float(equity_floor),
+        "trading_halt_bars": int(trading_halt_bars),
+        "skip_trades_if_cost_exceeds_equity_ratio": float(skip_trades_if_cost_exceeds_equity_ratio),
+        "transition_smoother_enabled": bool(transition_smoother_enabled),
+        "gross_step_up": float(gross_step_up),
+        "gross_step_down": float(gross_step_down),
+        "post_halt_cooldown_bars": int(post_halt_cooldown_bars),
+        "post_halt_max_gross": float(post_halt_max_gross),
+        "liquidation_lookback_bars": int(liquidation_lookback_bars),
+        "liquidation_lookback_max_gross": float(liquidation_lookback_max_gross),
+        "enable_symbol_shock_filters": bool(enable_symbol_shock_filters),
+        "max_abs_weight_per_symbol": float(max_abs_weight_per_symbol),
+        "atr_shock_threshold": float(atr_shock_threshold),
+        "gap_shock_threshold": float(gap_shock_threshold),
+        "shock_cooldown_bars": int(shock_cooldown_bars),
+        "shock_mode": str(shock_mode),
+        "shock_weight_mult_atr": float(shock_weight_mult_atr),
+        "shock_weight_mult_gap": float(shock_weight_mult_gap),
+        "shock_freeze_rebalance": bool(shock_freeze_rebalance),
+        "shock_freeze_min_fraction": float(shock_freeze_min_fraction),
+        "lookback_score_mode": str(lookback_score_mode),
+        "count_cap_hits": int(cap_hit_count),
+        "avg_executed_fraction": float(executed_fraction_sum / max(executed_fraction_count, 1)),
+        "avg_backlog_notional": float(backlog_notional_sum / max(rebalance_attempts, 1)),
+        "max_backlog_notional": float(backlog_notional_max),
+        "avg_backlog_ratio": float(backlog_ratio_sum / max(rebalance_attempts, 1)),
+        "max_backlog_ratio": float(backlog_ratio_max),
+        "avg_cap_used": float(cap_used_sum / max(cap_used_count, 1)),
+        "cap_histogram": {k: int(v) for k, v in sorted(cap_histogram.items())},
+        "reduce_first_execution_ratio": float(reduce_first_execs / max(reduce_first_total_execs, 1)),
+        "reduce_first_exec_count": int(reduce_first_execs),
+        "reduce_first_candidate_count": int(reduce_first_candidates),
+        "equity_zero_or_negative_count": int(skip_reasons.get("equity_zero_or_negative", 0)),
+        "drift_force_count": int(drift_force_count),
+        "dd_trigger_counts": {k: int(v) for k, v in sorted(dd_trigger_counts.items())},
+        "time_in_dd_stage": {k: int(v) for k, v in sorted(time_in_dd_stage.items())},
+        "stage_transitions_up": int(stage_transitions_up),
+        "stage_transitions_down": int(stage_transitions_down),
+        "stage_3_longest_streak_bars": int(stage3_longest_streak_bars),
+        "stage_3_share": float(time_in_dd_stage.get("stage_3", 0) / max(sum(time_in_dd_stage.values()), 1)),
+        "avg_effective_gross_by_stage": {
+            k: (float(gross_sum_by_stage.get(k, 0.0)) / max(float(gross_cnt_by_stage.get(k, 0)), 1.0))
+            for k in sorted(gross_sum_by_stage.keys())
+        },
+        "gross_transition_magnitude_sum": float(gross_transition_magnitude_sum),
+        "gross_transition_max": float(gross_transition_max),
+        "applied_gross_mean": float(applied_gross_sum / max(applied_gross_count, 1)),
+        "applied_gross_var": float((applied_gross_sq_sum / max(applied_gross_count, 1)) - (applied_gross_sum / max(applied_gross_count, 1)) ** 2),
+        "backlog_gross_error_mean": float(gross_error_sum / max(applied_gross_count, 1)),
+        "backlog_gross_error_max": float(gross_error_max),
+        "liquidation_after_halt_count": int(liquidation_after_halt_count),
+        "kill_switch_events": {
+            "count": int(kill_switch_count),
+            "first_ts": kill_switch_first_ts,
+            "total_bars_in_kill": int(kill_bars),
+        },
+        "liquidation_events": {
+            "count": int(len(liquidation_df)),
+            "first_ts": None if liquidation_df.empty else str(liquidation_df.iloc[0]["timestamp"]),
+        },
+        "negative_equity_cause_counts": {k: int(v) for k, v in sorted(liquidation_reason_counts.items())},
+        "negative_equity_cause_top3": sorted(
+            (
+                {"reason": str(k), "count": int(v)}
+                for k, v in liquidation_reason_counts.items()
+                if int(v) > 0
+            ),
+            key=lambda x: x["count"],
+            reverse=True,
+        )[:3],
+        "excluded_counts_by_reason": {k: int(v) for k, v in sorted(excluded_counts_by_reason.items())},
+        "shocked_counts_by_reason": {k: int(v) for k, v in sorted(shocked_counts_by_reason.items())},
+        "avg_effective_mult_by_reason": {
+            k: (
+                float(shocked_mult_sum_by_reason.get(k, 0.0))
+                / max(float(shocked_mult_count_by_reason.get(k, 0)), 1.0)
+            )
+            for k in sorted(shocked_mult_sum_by_reason.keys())
+        },
+        "fraction_of_time_any_shock_active": float(any_shock_active_bar_count / max(rebalance_attempts, 1)),
+        "shock_active_bars_count": int(shock_active_bars_count),
+        "rebalance_skipped_due_to_shock_count": int(rebalance_skipped_due_to_shock_count),
+        "rebalance_skipped_due_to_shock_ratio": float(rebalance_skipped_due_to_shock_count / max(rebalance_attempts, 1)),
+        "cap_hit_counts_by_symbol": {k: int(v) for k, v in sorted(cap_hit_counts_by_symbol.items())},
+        "top5_shocked_symbols": [
+            {"symbol": str(k), "count": int(v)}
+            for k, v in sorted(shocked_symbol_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        ],
+        "top5_excluded_symbols": [
+            {"symbol": str(k), "count": int(v)}
+            for k, v in sorted(shocked_symbol_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        ],
+        "top5_cap_hit_symbols": [
+            {"symbol": str(k), "count": int(v)}
+            for k, v in sorted(cap_hit_counts_by_symbol.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        ],
     }
     return PortfolioSimResult(
         metrics=metrics,
         equity_curve=equity_df,
+        dd_timeline=dd_df,
+        gross_target_applied=gross_df,
+        excluded_symbols=excluded_df,
+        symbol_risk_caps=risk_cap_df,
         positions=pos_df,
         turnover=turnover_df,
         cost_breakdown=cost_df,
+        liquidation_events=liquidation_df,
         diagnostics=diagnostics,
         debug_dump=debug_events,
     )
@@ -1730,6 +2818,22 @@ def _label_regimes(
     return pd.Series([f"{t}|{v}" for t, v in zip(trend, vol)], index=df.index, dtype="object")
 
 
+def _resolve_gross_profile(profile_name: str) -> dict[str, float]:
+    name = str(profile_name).strip().lower()
+    return dict(REGIME_GROSS_PROFILES.get(name, REGIME_GROSS_PROFILES["balanced"]))
+
+
+def _nearest_regime_map(
+    regime_maps_by_pct: dict[float, dict[str, str]],
+    pct: float,
+) -> dict[str, str]:
+    if not regime_maps_by_pct:
+        return {}
+    target = float(pct)
+    key = min(regime_maps_by_pct.keys(), key=lambda x: abs(float(x) - target))
+    return regime_maps_by_pct[key]
+
+
 def run_regime_gating(
     *,
     candles: pd.DataFrame,
@@ -1833,6 +2937,10 @@ def _portfolio_params_to_dict(params: PortfolioParams) -> dict[str, Any]:
         "turnover_threshold": float(params.turnover_threshold),
         "vol_lookback": int(params.vol_lookback),
         "rank_buffer": int(params.rank_buffer),
+        "high_vol_percentile": float(params.high_vol_percentile),
+        "gross_map": str(params.gross_map),
+        "off_grace_bars": int(params.off_grace_bars),
+        "phased_entry_steps": int(params.phased_entry_steps),
     }
 
 
@@ -1849,6 +2957,10 @@ def _portfolio_params_from_dict(payload: dict[str, Any]) -> PortfolioParams:
         turnover_threshold=max(float(payload.get("turnover_threshold", 0.0)), 0.0),
         vol_lookback=max(int(payload.get("vol_lookback", 96)), 5),
         rank_buffer=max(int(payload.get("rank_buffer", 0)), 0),
+        high_vol_percentile=min(max(float(payload.get("high_vol_percentile", 0.65)), 0.10), 0.99),
+        gross_map=str(payload.get("gross_map", "balanced")).strip().lower() or "balanced",
+        off_grace_bars=max(int(payload.get("off_grace_bars", 0)), 0),
+        phased_entry_steps=max(int(payload.get("phased_entry_steps", 1)), 1),
     )
 
 
@@ -1862,13 +2974,27 @@ def _build_portfolio_param_grid(
     turnover_threshold: float,
     vol_lookback: int,
     rank_buffers: list[int],
+    high_vol_percentiles: list[float],
+    gross_maps: list[str],
+    off_grace_bars_list: list[int],
+    phased_entry_steps_list: list[int],
 ) -> list[PortfolioParams]:
     grid: list[PortfolioParams] = []
     for model in signal_models:
         norm_model = model.strip().lower()
         if norm_model not in {"momentum", "mean_reversion"}:
             continue
-        for lb, rb, k, gross, rank_buffer in itertools.product(lookback_bars, rebalance_bars, k_values, gross_values, rank_buffers):
+        for lb, rb, k, gross, rank_buffer, hv_pct, gross_map, off_grace, phased_steps in itertools.product(
+            lookback_bars,
+            rebalance_bars,
+            k_values,
+            gross_values,
+            rank_buffers,
+            high_vol_percentiles,
+            gross_maps,
+            off_grace_bars_list,
+            phased_entry_steps_list,
+        ):
             grid.append(
                 PortfolioParams(
                     signal_model=norm_model,  # type: ignore[arg-type]
@@ -1879,6 +3005,10 @@ def _build_portfolio_param_grid(
                     turnover_threshold=max(float(turnover_threshold), 0.0),
                     vol_lookback=max(int(vol_lookback), 5),
                     rank_buffer=max(int(rank_buffer), 0),
+                    high_vol_percentile=min(max(float(hv_pct), 0.10), 0.99),
+                    gross_map=str(gross_map).strip().lower() or "balanced",
+                    off_grace_bars=max(int(off_grace), 0),
+                    phased_entry_steps=max(int(phased_steps), 1),
                 )
             )
     uniq: dict[str, PortfolioParams] = {}
@@ -1903,12 +3033,56 @@ def run_portfolio_walk_forward(
     seed: int,
     start: str,
     end: str,
-    regime_by_ts: dict[str, str],
-    regime_size_map: dict[str, float],
+    regime_maps_by_pct: dict[float, dict[str, str]],
     regime_turnover_threshold_map: dict[str, float] | None = None,
     debug_mode: bool = False,
     max_cost_ratio_per_bar: float = 0.05,
+    dd_controller_enabled: bool = False,
+    dd_thresholds: tuple[float, float, float, float] = (0.10, 0.20, 0.30, 0.40),
+    dd_gross_mults: tuple[float, float, float, float, float] = (1.0, 0.70, 0.50, 0.30, 0.0),
+    dd_recover_thresholds: tuple[float, float, float, float] = (0.08, 0.16, 0.24, 0.32),
+    kill_cooldown_bars: int = 168,
+    disable_new_entry_when_dd: bool = True,
+    rolling_peak_window_bars: int | None = None,
+    stage_down_confirm_bars: int = 48,
+    stage3_down_confirm_bars: int = 96,
+    reentry_ramp_steps: int = 3,
+    disable_new_entry_stage: int = 3,
+    dd_turnover_threshold_mult: float = 1.5,
+    dd_rebalance_mult: float | None = None,
+    cap_mode: Literal["fixed", "adaptive"] = "fixed",
+    base_cap: float = 0.25,
+    cap_min: float = 0.20,
+    cap_max: float = 0.40,
+    backlog_thresholds: tuple[float, float, float] = (0.25, 0.50, 0.75),
+    cap_steps: tuple[float, float, float, float] = (0.25, 0.30, 0.35, 0.40),
+    high_vol_cap_max: float = 0.30,
+    max_turnover_notional_to_equity: float | None = 0.25,
+    drift_threshold: float | None = 0.35,
+    gross_decay_steps: int = 3,
     max_notional_to_equity_mult: float = 3.0,
+    enable_liquidation: bool = True,
+    equity_floor_ratio: float = 0.01,
+    trading_halt_bars: int = 168,
+    skip_trades_if_cost_exceeds_equity_ratio: float = 0.02,
+    transition_smoother_enabled: bool = False,
+    gross_step_up: float = 0.10,
+    gross_step_down: float = 0.25,
+    post_halt_cooldown_bars: int = 168,
+    post_halt_max_gross: float = 0.15,
+    liquidation_lookback_bars: int = 720,
+    liquidation_lookback_max_gross: float = 0.15,
+    enable_symbol_shock_filters: bool = True,
+    max_abs_weight_per_symbol: float = 0.12,
+    atr_shock_threshold: float = 2.5,
+    gap_shock_threshold: float = 0.10,
+    shock_cooldown_bars: int = 72,
+    shock_mode: Literal["exclude", "downweight"] = "downweight",
+    shock_weight_mult_atr: float = 0.25,
+    shock_weight_mult_gap: float = 0.10,
+    shock_freeze_rebalance: bool | None = None,
+    shock_freeze_min_fraction: float = 0.30,
+    lookback_score_mode: Literal["single", "median_3"] = "single",
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
     if not param_grid:
         return pd.DataFrame(), pd.DataFrame(), {"oos_positive_ratio": 0.0, "param_stability_score": 0.0}
@@ -1934,6 +3108,8 @@ def run_portfolio_walk_forward(
 
         train_scores: list[dict[str, Any]] = []
         for p in candidates:
+            candidate_regime_map = _nearest_regime_map(regime_maps_by_pct, p.high_vol_percentile)
+            size_map = _resolve_gross_profile(p.gross_map)
             try:
                 sim = _simulate_portfolio(
                     market=train_market,
@@ -1941,13 +3117,58 @@ def run_portfolio_walk_forward(
                     base_config=base_config,
                     cost_cfg=baseline_cost,
                     seed=seed + w_index,
-                    regime_by_ts=regime_by_ts,
+                    regime_by_ts=candidate_regime_map,
                     regime_mode="sizing",
-                    regime_size_map=regime_size_map,
+                    regime_size_map=size_map,
                     regime_turnover_threshold_map=regime_turnover_threshold_map,
                     debug_mode=debug_mode,
                     max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+                    dd_controller_enabled=dd_controller_enabled,
+                    dd_thresholds=dd_thresholds,
+                    dd_gross_mults=dd_gross_mults,
+                    dd_recover_thresholds=dd_recover_thresholds,
+                    kill_cooldown_bars=kill_cooldown_bars,
+                    disable_new_entry_when_dd=disable_new_entry_when_dd,
+                    rolling_peak_window_bars=rolling_peak_window_bars,
+                    stage_down_confirm_bars=stage_down_confirm_bars,
+                    stage3_down_confirm_bars=stage3_down_confirm_bars,
+                    reentry_ramp_steps=reentry_ramp_steps,
+                    disable_new_entry_stage=disable_new_entry_stage,
+                    dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+                    dd_rebalance_mult=dd_rebalance_mult,
+                    cap_mode=cap_mode,
+                    base_cap=base_cap,
+                    cap_min=cap_min,
+                    cap_max=cap_max,
+                    backlog_thresholds=backlog_thresholds,
+                    cap_steps=cap_steps,
+                    high_vol_cap_max=high_vol_cap_max,
+                    max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+                    drift_threshold=drift_threshold,
+                    gross_decay_steps=gross_decay_steps,
                     max_notional_to_equity_mult=max_notional_to_equity_mult,
+                    enable_liquidation=enable_liquidation,
+                    equity_floor_ratio=equity_floor_ratio,
+                    trading_halt_bars=trading_halt_bars,
+                    skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+                    transition_smoother_enabled=transition_smoother_enabled,
+                    gross_step_up=gross_step_up,
+                    gross_step_down=gross_step_down,
+                    post_halt_cooldown_bars=post_halt_cooldown_bars,
+                    post_halt_max_gross=post_halt_max_gross,
+                    liquidation_lookback_bars=liquidation_lookback_bars,
+                    liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+                    enable_symbol_shock_filters=enable_symbol_shock_filters,
+                    max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+                    atr_shock_threshold=atr_shock_threshold,
+                    gap_shock_threshold=gap_shock_threshold,
+                    shock_cooldown_bars=shock_cooldown_bars,
+                    shock_mode=shock_mode,
+                    shock_weight_mult_atr=shock_weight_mult_atr,
+                    shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
                 )
             except Exception:
                 continue
@@ -1978,6 +3199,8 @@ def run_portfolio_walk_forward(
         test_rows: list[dict[str, Any]] = []
         for j, payload in enumerate(top_params):
             p = _portfolio_params_from_dict(payload)
+            candidate_regime_map = _nearest_regime_map(regime_maps_by_pct, p.high_vol_percentile)
+            size_map = _resolve_gross_profile(p.gross_map)
             try:
                 sim = _simulate_portfolio(
                     market=test_market,
@@ -1985,13 +3208,58 @@ def run_portfolio_walk_forward(
                     base_config=base_config,
                     cost_cfg=baseline_cost,
                     seed=seed + w_index + j + 1,
-                    regime_by_ts=regime_by_ts,
+                    regime_by_ts=candidate_regime_map,
                     regime_mode="sizing",
-                    regime_size_map=regime_size_map,
+                    regime_size_map=size_map,
                     regime_turnover_threshold_map=regime_turnover_threshold_map,
                     debug_mode=debug_mode,
                     max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+                    dd_controller_enabled=dd_controller_enabled,
+                    dd_thresholds=dd_thresholds,
+                    dd_gross_mults=dd_gross_mults,
+                    dd_recover_thresholds=dd_recover_thresholds,
+                    kill_cooldown_bars=kill_cooldown_bars,
+                    disable_new_entry_when_dd=disable_new_entry_when_dd,
+                    rolling_peak_window_bars=rolling_peak_window_bars,
+                    stage_down_confirm_bars=stage_down_confirm_bars,
+                    stage3_down_confirm_bars=stage3_down_confirm_bars,
+                    reentry_ramp_steps=reentry_ramp_steps,
+                    disable_new_entry_stage=disable_new_entry_stage,
+                    dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+                    dd_rebalance_mult=dd_rebalance_mult,
+                    cap_mode=cap_mode,
+                    base_cap=base_cap,
+                    cap_min=cap_min,
+                    cap_max=cap_max,
+                    backlog_thresholds=backlog_thresholds,
+                    cap_steps=cap_steps,
+                    high_vol_cap_max=high_vol_cap_max,
+                    max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+                    drift_threshold=drift_threshold,
+                    gross_decay_steps=gross_decay_steps,
                     max_notional_to_equity_mult=max_notional_to_equity_mult,
+                    enable_liquidation=enable_liquidation,
+                    equity_floor_ratio=equity_floor_ratio,
+                    trading_halt_bars=trading_halt_bars,
+                    skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+                    transition_smoother_enabled=transition_smoother_enabled,
+                    gross_step_up=gross_step_up,
+                    gross_step_down=gross_step_down,
+                    post_halt_cooldown_bars=post_halt_cooldown_bars,
+                    post_halt_max_gross=post_halt_max_gross,
+                    liquidation_lookback_bars=liquidation_lookback_bars,
+                    liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+                    enable_symbol_shock_filters=enable_symbol_shock_filters,
+                    max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+                    atr_shock_threshold=atr_shock_threshold,
+                    gap_shock_threshold=gap_shock_threshold,
+                    shock_cooldown_bars=shock_cooldown_bars,
+                    shock_mode=shock_mode,
+                    shock_weight_mult_atr=shock_weight_mult_atr,
+                    shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
                 )
             except Exception:
                 continue
@@ -2078,7 +3346,52 @@ def run_portfolio_cost_stress(
     regime_turnover_threshold_map: dict[str, float] | None = None,
     debug_mode: bool = False,
     max_cost_ratio_per_bar: float = 0.05,
+    dd_controller_enabled: bool = False,
+    dd_thresholds: tuple[float, float, float, float] = (0.10, 0.20, 0.30, 0.40),
+    dd_gross_mults: tuple[float, float, float, float, float] = (1.0, 0.70, 0.50, 0.30, 0.0),
+    dd_recover_thresholds: tuple[float, float, float, float] = (0.08, 0.16, 0.24, 0.32),
+    kill_cooldown_bars: int = 168,
+    disable_new_entry_when_dd: bool = True,
+    rolling_peak_window_bars: int | None = None,
+    stage_down_confirm_bars: int = 48,
+    stage3_down_confirm_bars: int = 96,
+    reentry_ramp_steps: int = 3,
+    disable_new_entry_stage: int = 3,
+    dd_turnover_threshold_mult: float = 1.5,
+    dd_rebalance_mult: float | None = None,
+    cap_mode: Literal["fixed", "adaptive"] = "fixed",
+    base_cap: float = 0.25,
+    cap_min: float = 0.20,
+    cap_max: float = 0.40,
+    backlog_thresholds: tuple[float, float, float] = (0.25, 0.50, 0.75),
+    cap_steps: tuple[float, float, float, float] = (0.25, 0.30, 0.35, 0.40),
+    high_vol_cap_max: float = 0.30,
+    max_turnover_notional_to_equity: float | None = 0.25,
+    drift_threshold: float | None = 0.35,
+    gross_decay_steps: int = 3,
     max_notional_to_equity_mult: float = 3.0,
+    enable_liquidation: bool = True,
+    equity_floor_ratio: float = 0.01,
+    trading_halt_bars: int = 168,
+    skip_trades_if_cost_exceeds_equity_ratio: float = 0.02,
+    transition_smoother_enabled: bool = False,
+    gross_step_up: float = 0.10,
+    gross_step_down: float = 0.25,
+    post_halt_cooldown_bars: int = 168,
+    post_halt_max_gross: float = 0.15,
+    liquidation_lookback_bars: int = 720,
+    liquidation_lookback_max_gross: float = 0.15,
+    enable_symbol_shock_filters: bool = True,
+    max_abs_weight_per_symbol: float = 0.12,
+    atr_shock_threshold: float = 2.5,
+    gap_shock_threshold: float = 0.10,
+    shock_cooldown_bars: int = 72,
+    shock_mode: Literal["exclude", "downweight"] = "downweight",
+    shock_weight_mult_atr: float = 0.25,
+    shock_weight_mult_gap: float = 0.10,
+    shock_freeze_rebalance: bool | None = None,
+    shock_freeze_min_fraction: float = 0.30,
+    lookback_score_mode: Literal["single", "median_3"] = "single",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows: list[dict[str, Any]] = []
     scenario_idx = 0
@@ -2117,7 +3430,52 @@ def run_portfolio_cost_stress(
                         regime_turnover_threshold_map=regime_turnover_threshold_map,
                         debug_mode=debug_mode,
                         max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+                        dd_controller_enabled=dd_controller_enabled,
+                        dd_thresholds=dd_thresholds,
+                        dd_gross_mults=dd_gross_mults,
+                        dd_recover_thresholds=dd_recover_thresholds,
+                        kill_cooldown_bars=kill_cooldown_bars,
+                        disable_new_entry_when_dd=disable_new_entry_when_dd,
+                        rolling_peak_window_bars=rolling_peak_window_bars,
+                        stage_down_confirm_bars=stage_down_confirm_bars,
+                        stage3_down_confirm_bars=stage3_down_confirm_bars,
+                        reentry_ramp_steps=reentry_ramp_steps,
+                        disable_new_entry_stage=disable_new_entry_stage,
+                        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+                        dd_rebalance_mult=dd_rebalance_mult,
+                        cap_mode=cap_mode,
+                        base_cap=base_cap,
+                        cap_min=cap_min,
+                        cap_max=cap_max,
+                        backlog_thresholds=backlog_thresholds,
+                        cap_steps=cap_steps,
+                        high_vol_cap_max=high_vol_cap_max,
+                        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+                        drift_threshold=drift_threshold,
+                        gross_decay_steps=gross_decay_steps,
                         max_notional_to_equity_mult=max_notional_to_equity_mult,
+                        enable_liquidation=enable_liquidation,
+                        equity_floor_ratio=equity_floor_ratio,
+                        trading_halt_bars=trading_halt_bars,
+                        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+                        transition_smoother_enabled=transition_smoother_enabled,
+                        gross_step_up=gross_step_up,
+                        gross_step_down=gross_step_down,
+                        post_halt_cooldown_bars=post_halt_cooldown_bars,
+                        post_halt_max_gross=post_halt_max_gross,
+                        liquidation_lookback_bars=liquidation_lookback_bars,
+                        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+                        enable_symbol_shock_filters=enable_symbol_shock_filters,
+                        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+                        atr_shock_threshold=atr_shock_threshold,
+                        gap_shock_threshold=gap_shock_threshold,
+                        shock_cooldown_bars=shock_cooldown_bars,
+                        shock_mode=shock_mode,
+                        shock_weight_mult_atr=shock_weight_mult_atr,
+                        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
                     )
                     rows.append(
                         {
@@ -2152,11 +3510,56 @@ def run_portfolio_regime_gating(
     baseline_cost: PortfolioCostConfig,
     seed: int,
     regime_by_ts: dict[str, str],
-    high_vol_gross_mult: float,
+    base_regime_size_map: dict[str, float],
     regime_turnover_threshold_map: dict[str, float] | None = None,
     debug_mode: bool = False,
     max_cost_ratio_per_bar: float = 0.05,
+    dd_controller_enabled: bool = False,
+    dd_thresholds: tuple[float, float, float, float] = (0.10, 0.20, 0.30, 0.40),
+    dd_gross_mults: tuple[float, float, float, float, float] = (1.0, 0.70, 0.50, 0.30, 0.0),
+    dd_recover_thresholds: tuple[float, float, float, float] = (0.08, 0.16, 0.24, 0.32),
+    kill_cooldown_bars: int = 168,
+    disable_new_entry_when_dd: bool = True,
+    rolling_peak_window_bars: int | None = None,
+    stage_down_confirm_bars: int = 48,
+    stage3_down_confirm_bars: int = 96,
+    reentry_ramp_steps: int = 3,
+    disable_new_entry_stage: int = 3,
+    dd_turnover_threshold_mult: float = 1.5,
+    dd_rebalance_mult: float | None = None,
+    cap_mode: Literal["fixed", "adaptive"] = "fixed",
+    base_cap: float = 0.25,
+    cap_min: float = 0.20,
+    cap_max: float = 0.40,
+    backlog_thresholds: tuple[float, float, float] = (0.25, 0.50, 0.75),
+    cap_steps: tuple[float, float, float, float] = (0.25, 0.30, 0.35, 0.40),
+    high_vol_cap_max: float = 0.30,
+    max_turnover_notional_to_equity: float | None = 0.25,
+    drift_threshold: float | None = 0.35,
+    gross_decay_steps: int = 3,
     max_notional_to_equity_mult: float = 3.0,
+    enable_liquidation: bool = True,
+    equity_floor_ratio: float = 0.01,
+    trading_halt_bars: int = 168,
+    skip_trades_if_cost_exceeds_equity_ratio: float = 0.02,
+    transition_smoother_enabled: bool = False,
+    gross_step_up: float = 0.10,
+    gross_step_down: float = 0.25,
+    post_halt_cooldown_bars: int = 168,
+    post_halt_max_gross: float = 0.15,
+    liquidation_lookback_bars: int = 720,
+    liquidation_lookback_max_gross: float = 0.15,
+    enable_symbol_shock_filters: bool = True,
+    max_abs_weight_per_symbol: float = 0.12,
+    atr_shock_threshold: float = 2.5,
+    gap_shock_threshold: float = 0.10,
+    shock_cooldown_bars: int = 72,
+    shock_mode: Literal["exclude", "downweight"] = "downweight",
+    shock_weight_mult_atr: float = 0.25,
+    shock_weight_mult_gap: float = 0.10,
+    shock_freeze_rebalance: bool | None = None,
+    shock_freeze_min_fraction: float = 0.30,
+    lookback_score_mode: Literal["single", "median_3"] = "single",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     regime_names = sorted(set(regime_by_ts.values()))
     scenarios: list[tuple[str, Literal["none", "on_off", "sizing"], set[str], dict[str, float]]] = []
@@ -2165,14 +3568,22 @@ def run_portfolio_regime_gating(
         scenarios.append((f"onoff_{rg.replace('|', '_')}", "on_off", {rg}, {}))
     scenarios.append(
         (
-            "sizing_highvol_half",
+            "sizing_base_map",
+            "sizing",
+            set(regime_names),
+            dict(base_regime_size_map),
+        )
+    )
+    scenarios.append(
+        (
+            "sizing_range_highvol_off",
             "sizing",
             set(regime_names),
             {
                 "trend|low_vol": 1.0,
-                "trend|high_vol": high_vol_gross_mult,
+                "trend|high_vol": min(float(base_regime_size_map.get("trend|high_vol", 0.25)), 0.25),
                 "range|low_vol": 1.0,
-                "range|high_vol": high_vol_gross_mult,
+                "range|high_vol": 0.0,
             },
         )
     )
@@ -2193,7 +3604,52 @@ def run_portfolio_regime_gating(
             regime_turnover_threshold_map=regime_turnover_threshold_map,
             debug_mode=debug_mode,
             max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+            dd_controller_enabled=dd_controller_enabled,
+            dd_thresholds=dd_thresholds,
+            dd_gross_mults=dd_gross_mults,
+            dd_recover_thresholds=dd_recover_thresholds,
+            kill_cooldown_bars=kill_cooldown_bars,
+            disable_new_entry_when_dd=disable_new_entry_when_dd,
+            rolling_peak_window_bars=rolling_peak_window_bars,
+            stage_down_confirm_bars=stage_down_confirm_bars,
+            stage3_down_confirm_bars=stage3_down_confirm_bars,
+            reentry_ramp_steps=reentry_ramp_steps,
+            disable_new_entry_stage=disable_new_entry_stage,
+            dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+            dd_rebalance_mult=dd_rebalance_mult,
+            cap_mode=cap_mode,
+            base_cap=base_cap,
+            cap_min=cap_min,
+            cap_max=cap_max,
+            backlog_thresholds=backlog_thresholds,
+            cap_steps=cap_steps,
+            high_vol_cap_max=high_vol_cap_max,
+            max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+            drift_threshold=drift_threshold,
+            gross_decay_steps=gross_decay_steps,
             max_notional_to_equity_mult=max_notional_to_equity_mult,
+            enable_liquidation=enable_liquidation,
+            equity_floor_ratio=equity_floor_ratio,
+            trading_halt_bars=trading_halt_bars,
+            skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+            transition_smoother_enabled=transition_smoother_enabled,
+            gross_step_up=gross_step_up,
+            gross_step_down=gross_step_down,
+            post_halt_cooldown_bars=post_halt_cooldown_bars,
+            post_halt_max_gross=post_halt_max_gross,
+            liquidation_lookback_bars=liquidation_lookback_bars,
+            liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+            enable_symbol_shock_filters=enable_symbol_shock_filters,
+            max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+            atr_shock_threshold=atr_shock_threshold,
+            gap_shock_threshold=gap_shock_threshold,
+            shock_cooldown_bars=shock_cooldown_bars,
+            shock_mode=shock_mode,
+            shock_weight_mult_atr=shock_weight_mult_atr,
+            shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
         )
         m = sim.metrics
         rows.append(
@@ -2233,10 +3689,10 @@ def _portfolio_verdict(summary: dict[str, Any]) -> str:
     gate_reb = bool(float(summary.get("rebalance_count", 0.0)) >= 200.0)
     gate_regime = bool(summary.get("regime_pf_mdd_flag", False))
     if gate_wfo and gate_cost and gate_mdd and gate_reb and gate_regime:
-        return "합격"
+        return "PASS"
     if (gate_wfo and gate_cost) or (gate_cost and gate_reb and gate_regime):
-        return "불확실"
-    return "불합격"
+        return "MIXED"
+    return "FAIL"
 
 
 def _portfolio_report(
@@ -2249,6 +3705,11 @@ def _portfolio_report(
     cost_df: pd.DataFrame,
     wf_df: pd.DataFrame,
     regime_table_df: pd.DataFrame,
+    regime_exposure_df: pd.DataFrame,
+    rate_limit_compare_df: pd.DataFrame,
+    transition_compare_df: pd.DataFrame,
+    peak_mode_compare_df: pd.DataFrame,
+    liquidation_df: pd.DataFrame,
 ) -> None:
     def block_csv(df: pd.DataFrame, head: int = 12) -> str:
         if df.empty:
@@ -2304,11 +3765,90 @@ def _portfolio_report(
             lines.append(f"  - {k}: {v}")
     else:
         lines.append("- skip_reasons: _(none)_")
+    dd_counts = diagnostics.get("dd_trigger_counts", {})
+    if isinstance(dd_counts, dict) and dd_counts:
+        lines.append("- dd_trigger_counts:")
+        for k, v in sorted(dd_counts.items()):
+            lines.append(f"  - {k}: {v}")
+    dd_times = diagnostics.get("time_in_dd_stage", {})
+    if isinstance(dd_times, dict) and dd_times:
+        lines.append("- time_in_dd_stage:")
+        for k, v in sorted(dd_times.items()):
+            lines.append(f"  - {k}: {v}")
+    kill_info = diagnostics.get("kill_switch_events", {})
+    if isinstance(kill_info, dict):
+        lines.append(f"- kill_switch_events: `{json.dumps(kill_info, ensure_ascii=True)}`")
+    liq_info = diagnostics.get("liquidation_events", {})
+    if isinstance(liq_info, dict):
+        lines.append(f"- liquidation_events: `{json.dumps(liq_info, ensure_ascii=True)}`")
+    liq_top3 = diagnostics.get("negative_equity_cause_top3", [])
+    if isinstance(liq_top3, list) and liq_top3:
+        lines.append("- liquidation_cause_top3:")
+        for item in liq_top3[:3]:
+            reason = str(item.get("reason", "unknown")) if isinstance(item, dict) else str(item)
+            count = int(item.get("count", 0)) if isinstance(item, dict) else 0
+            lines.append(f"  - {reason}: {count}")
+    exc_reason = diagnostics.get("excluded_counts_by_reason", {})
+    if isinstance(exc_reason, dict) and exc_reason:
+        lines.append(f"- excluded_counts_by_reason: `{json.dumps(exc_reason, ensure_ascii=True)}`")
+    shocked_reason = diagnostics.get("shocked_counts_by_reason", {})
+    if isinstance(shocked_reason, dict) and shocked_reason:
+        lines.append(f"- shocked_counts_by_reason: `{json.dumps(shocked_reason, ensure_ascii=True)}`")
+    avg_mult = diagnostics.get("avg_effective_mult_by_reason", {})
+    if isinstance(avg_mult, dict) and avg_mult:
+        lines.append(f"- avg_effective_mult_by_reason: `{json.dumps(avg_mult, ensure_ascii=True)}`")
+    lines.append(
+        f"- fraction_of_time_any_shock_active: `{float(diagnostics.get('fraction_of_time_any_shock_active', 0.0)):.6f}`"
+    )
+    lines.append(f"- shock_active_bars_count: `{int(diagnostics.get('shock_active_bars_count', 0))}`")
+    lines.append(
+        f"- rebalance_skipped_due_to_shock: `{int(diagnostics.get('rebalance_skipped_due_to_shock_count', 0))}`"
+        f" (`{float(diagnostics.get('rebalance_skipped_due_to_shock_ratio', 0.0)):.6f}`)"
+    )
+    lines.append("")
+    lines.append("## Fee Spike Cause (Shock Freeze)")
+    fee_total = float(summary.get("fee_cost_total", 0.0))
+    attempt_count = int(diagnostics.get("rebalance_attempts", 0))
+    exec_count = int(diagnostics.get("rebalance_execs", 0))
+    fee_diag_df = pd.DataFrame(
+        [
+            {
+                "fee_cost_total": fee_total,
+                "rebalance_attempts": attempt_count,
+                "rebalance_execs": exec_count,
+                "shock_active_bars_count": int(diagnostics.get("shock_active_bars_count", 0)),
+                "rebalance_skipped_due_to_shock_count": int(diagnostics.get("rebalance_skipped_due_to_shock_count", 0)),
+                "rebalance_skipped_due_to_shock_ratio": float(diagnostics.get("rebalance_skipped_due_to_shock_ratio", 0.0)),
+                "fee_per_rebalance_attempt": fee_total / max(attempt_count, 1),
+                "fee_per_rebalance_exec": fee_total / max(exec_count, 1),
+            }
+        ]
+    )
+    lines.append(block_csv(fee_diag_df, head=1))
+    if int(diagnostics.get("rebalance_skipped_due_to_shock_count", 0)) > 0:
+        lines.append("- interpretation: shock-active bars skipped rebalances, reducing fee churn from micro-adjustment trades.")
+    else:
+        lines.append("- interpretation: no shock-freeze skip was triggered, so fee reduction from freeze could not materialize.")
     lines.append("")
     lines.append("## Config")
     lines.append("```json")
     lines.append(json.dumps(config_dump, indent=2, ensure_ascii=True, default=str))
     lines.append("```")
+    lines.append("")
+    lines.append("## Rebalance Rate Limit (fixed vs adaptive)")
+    lines.append(block_csv(rate_limit_compare_df))
+    lines.append("")
+    lines.append("## Transition Smoother Comparison (off vs on)")
+    lines.append(block_csv(transition_compare_df))
+    lines.append("")
+    lines.append("## Peak Mode Comparison (absolute vs rolling)")
+    lines.append(block_csv(peak_mode_compare_df))
+    lines.append("")
+    lines.append("## Backlog Ratio Diagnostics")
+    lines.append(f"- avg_backlog_ratio: `{float(summary.get('avg_backlog_ratio', 0.0)):.6f}`")
+    lines.append(f"- max_backlog_ratio: `{float(summary.get('max_backlog_ratio', 0.0)):.6f}`")
+    lines.append(f"- avg_cap_used: `{float(summary.get('avg_cap_used', 0.0)):.6f}`")
+    lines.append(f"- fee_cost_per_gross_time: `{float(summary.get('fee_cost_per_gross_time', 0.0)):.8f}`")
     lines.append("")
     lines.append("## Cost Stress (head)")
     lines.append(block_csv(cost_df))
@@ -2319,7 +3859,79 @@ def _portfolio_report(
     lines.append("## Regime Table (head)")
     lines.append(block_csv(regime_table_df))
     lines.append("")
+    lines.append("## Regime Exposure Heatmap Table")
+    lines.append(block_csv(regime_exposure_df))
+    lines.append("")
+    lines.append("## Liquidation Events (head)")
+    lines.append(block_csv(liquidation_df))
+    lines.append("")
+    top_excluded = diagnostics.get("top5_excluded_symbols", [])
+    top_shocked = diagnostics.get("top5_shocked_symbols", [])
+    top_caps = diagnostics.get("top5_cap_hit_symbols", [])
+    lines.append("## Symbol Shocked Top5")
+    lines.append(block_csv(pd.DataFrame(top_shocked)))
+    lines.append("")
+    lines.append("## Symbol Exclusions Top5")
+    lines.append(block_csv(pd.DataFrame(top_excluded)))
+    lines.append("")
+    lines.append("## Symbol Cap Hits Top5")
+    lines.append(block_csv(pd.DataFrame(top_caps)))
+    lines.append("")
     (run_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _build_regime_exposure_table(sim: PortfolioSimResult) -> pd.DataFrame:
+    if sim.turnover.empty or sim.equity_curve.empty:
+        return pd.DataFrame(
+            columns=[
+                "regime",
+                "gross_mean",
+                "profit_factor",
+                "max_drawdown",
+                "trade_count",
+                "cost_total",
+                "fee_cost",
+                "slippage_cost",
+                "penalty_cost",
+                "off_ratio",
+            ]
+        )
+    turn = sim.turnover.copy()
+    eq = sim.equity_curve.copy()
+    cost = sim.cost_breakdown.copy()
+    eq["equity_prev"] = eq["equity"].shift(1)
+    eq["pnl_step"] = eq["equity"] - eq["equity_prev"]
+    eq["pnl_step"] = eq["pnl_step"].fillna(0.0)
+
+    core = turn.merge(cost, on="timestamp", how="left").merge(eq[["timestamp", "pnl_step"]], on="timestamp", how="left")
+    core["pnl_step"] = core["pnl_step"].fillna(0.0)
+    gross_by_ts = eq[["timestamp", "gross_exposure"]].copy()
+    core = core.merge(gross_by_ts, on="timestamp", how="left")
+
+    rows: list[dict[str, Any]] = []
+    for regime, g in core.groupby("regime"):
+        pnl = g["pnl_step"].to_numpy(dtype=float)
+        wins = pnl[pnl > 0]
+        losses = pnl[pnl < 0]
+        pf = float(np.sum(wins) / max(abs(np.sum(losses)), 1e-9)) if losses.size else float("inf")
+        eq_reg = eq[eq["regime"] == regime]["equity"].to_numpy(dtype=float)
+        mdd = _max_drawdown(eq_reg) if eq_reg.size else 0.0
+        off_ratio = float(np.mean(g["regime_scale"] <= 1e-12)) if "regime_scale" in g.columns else 0.0
+        rows.append(
+            {
+                "regime": regime,
+                "gross_mean": float(g["gross_exposure"].mean()) if "gross_exposure" in g.columns else 0.0,
+                "profit_factor": pf,
+                "max_drawdown": mdd,
+                "trade_count": float(g["trades_this_bar"].sum()) if "trades_this_bar" in g.columns else 0.0,
+                "cost_total": float(g["total_cost"].sum()) if "total_cost" in g.columns else 0.0,
+                "fee_cost": float(g["fee_cost"].sum()) if "fee_cost" in g.columns else 0.0,
+                "slippage_cost": float(g["slippage_cost"].sum()) if "slippage_cost" in g.columns else 0.0,
+                "penalty_cost": float(g["penalty_cost"].sum()) if "penalty_cost" in g.columns else 0.0,
+                "off_ratio": off_ratio,
+            }
+        )
+    return pd.DataFrame(rows).sort_values("regime").reset_index(drop=True)
 
 
 def run_portfolio_validation(
@@ -2340,6 +3952,10 @@ def run_portfolio_validation(
     k_values: list[int],
     gross_values: list[float],
     rank_buffers: list[int],
+    high_vol_percentiles: list[float],
+    gross_maps: list[str],
+    off_grace_bars_list: list[int],
+    phased_entry_steps_list: list[int],
     turnover_threshold: float,
     turnover_threshold_high_vol: float | None,
     turnover_threshold_low_vol: float | None,
@@ -2368,12 +3984,65 @@ def run_portfolio_validation(
     high_vol_gross_mult: float,
     debug_mode: bool,
     max_cost_ratio_per_bar: float,
+    dd_controller_enabled: bool = False,
+    dd_thresholds: tuple[float, float, float, float] = (0.10, 0.20, 0.30, 0.40),
+    dd_gross_mults: tuple[float, float, float, float, float] = (1.0, 0.70, 0.50, 0.30, 0.0),
+    dd_recover_thresholds: tuple[float, float, float, float] = (0.08, 0.16, 0.24, 0.32),
+    kill_cooldown_bars: int = 168,
+    disable_new_entry_when_dd: bool = True,
+    rolling_peak_window_bars: int | None = None,
+    stage_down_confirm_bars: int = 48,
+    stage3_down_confirm_bars: int = 96,
+    reentry_ramp_steps: int = 3,
+    disable_new_entry_stage: int = 3,
+    dd_turnover_threshold_mult: float = 1.5,
+    dd_rebalance_mult: float | None = None,
+    cap_mode: Literal["fixed", "adaptive"] = "fixed",
+    base_cap: float = 0.25,
+    cap_min: float = 0.20,
+    cap_max: float = 0.40,
+    backlog_thresholds: tuple[float, float, float] = (0.25, 0.50, 0.75),
+    cap_steps: tuple[float, float, float, float] = (0.25, 0.30, 0.35, 0.40),
+    high_vol_cap_max: float = 0.30,
+    max_turnover_notional_to_equity: float | None,
+    drift_threshold: float | None,
+    gross_decay_steps: int,
     max_notional_to_equity_mult: float,
+    enable_liquidation: bool = True,
+    equity_floor_ratio: float = 0.01,
+    trading_halt_bars: int = 168,
+    skip_trades_if_cost_exceeds_equity_ratio: float = 0.02,
+    transition_smoother_enabled: bool = False,
+    gross_step_up: float = 0.10,
+    gross_step_down: float = 0.25,
+    post_halt_cooldown_bars: int = 168,
+    post_halt_max_gross: float = 0.15,
+    liquidation_lookback_bars: int = 720,
+    liquidation_lookback_max_gross: float = 0.15,
+    enable_symbol_shock_filters: bool = True,
+    max_abs_weight_per_symbol: float = 0.12,
+    atr_shock_threshold: float = 2.5,
+    gap_shock_threshold: float = 0.10,
+    shock_cooldown_bars: int = 72,
+    shock_mode: Literal["exclude", "downweight"] = "downweight",
+    shock_weight_mult_atr: float = 0.25,
+    shock_weight_mult_gap: float = 0.10,
+    shock_freeze_rebalance: bool | None = None,
+    shock_freeze_min_fraction: float = 0.30,
+    lookback_score_mode: Literal["single", "median_3"] = "single",
     stop_on_anomaly: bool,
 ) -> PortfolioRunOutput:
     run_id = f"portfolio_{pd.Timestamp.now(tz='UTC').strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
     run_dir = output_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    if shock_freeze_rebalance is None:
+        shock_freeze_rebalance = bool(str(shock_mode).strip().lower() == "downweight")
+    else:
+        shock_freeze_rebalance = bool(shock_freeze_rebalance)
+    shock_freeze_min_fraction = min(max(float(shock_freeze_min_fraction), 0.0), 1.0)
+    lookback_score_mode = str(lookback_score_mode).strip().lower()  # type: ignore[assignment]
+    if lookback_score_mode not in {"single", "median_3"}:
+        lookback_score_mode = "single"  # type: ignore[assignment]
 
     candles_by_symbol = load_multi_candles(
         data_source=data_source,
@@ -2400,22 +4069,19 @@ def run_portfolio_validation(
             "volume": np.ones(market.bars, dtype=float),
         }
     )
-    regimes = _label_regimes(
-        btc_df,
-        trend_ema_span=trend_ema_span,
-        trend_slope_lookback=trend_slope_lookback,
-        trend_slope_threshold=trend_slope_threshold,
-        atr_period=regime_atr_period,
-        vol_lookback=regime_vol_lookback,
-        vol_percentile=regime_vol_percentile,
-    )
-    regime_by_ts = {_ts_key(ts): str(rg) for ts, rg in zip(market.timestamps, regimes)}
-    regime_size_map = {
-        "trend|low_vol": 1.0,
-        "trend|high_vol": float(high_vol_gross_mult),
-        "range|low_vol": 1.0,
-        "range|high_vol": float(high_vol_gross_mult),
-    }
+    pct_list = sorted({round(float(x), 4) for x in (high_vol_percentiles or [regime_vol_percentile])})
+    regime_maps_by_pct: dict[float, dict[str, str]] = {}
+    for pct in pct_list:
+        regimes = _label_regimes(
+            btc_df,
+            trend_ema_span=trend_ema_span,
+            trend_slope_lookback=trend_slope_lookback,
+            trend_slope_threshold=trend_slope_threshold,
+            atr_period=regime_atr_period,
+            vol_lookback=regime_vol_lookback,
+            vol_percentile=min(max(float(pct), 0.10), 0.99),
+        )
+        regime_maps_by_pct[float(pct)] = {_ts_key(ts): str(rg) for ts, rg in zip(market.timestamps, regimes)}
     low_thr = float(turnover_threshold if turnover_threshold_low_vol is None else turnover_threshold_low_vol)
     high_thr = float(turnover_threshold if turnover_threshold_high_vol is None else turnover_threshold_high_vol)
     regime_turnover_threshold_map = {
@@ -2434,6 +4100,10 @@ def run_portfolio_validation(
         turnover_threshold=turnover_threshold,
         vol_lookback=vol_lookback,
         rank_buffers=rank_buffers,
+        high_vol_percentiles=pct_list,
+        gross_maps=gross_maps,
+        off_grace_bars_list=off_grace_bars_list,
+        phased_entry_steps_list=phased_entry_steps_list,
     )
     if not param_grid:
         raise ValueError("portfolio parameter grid is empty")
@@ -2466,14 +4136,62 @@ def run_portfolio_validation(
         seed=seed,
         start=start,
         end=end,
-        regime_by_ts=regime_by_ts,
-        regime_size_map=regime_size_map,
+        regime_maps_by_pct=regime_maps_by_pct,
         regime_turnover_threshold_map=regime_turnover_threshold_map,
         debug_mode=debug_mode,
         max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode=cap_mode,
+        base_cap=base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
         max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=transition_smoother_enabled,
+        gross_step_up=gross_step_up,
+        gross_step_down=gross_step_down,
+        post_halt_cooldown_bars=post_halt_cooldown_bars,
+        post_halt_max_gross=post_halt_max_gross,
+        liquidation_lookback_bars=liquidation_lookback_bars,
+        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
     )
     selected_params = _select_portfolio_params(wf_df=wf_df, fallback=param_grid[0])
+    selected_regime_map = _nearest_regime_map(regime_maps_by_pct, selected_params.high_vol_percentile)
+    selected_size_map = _resolve_gross_profile(selected_params.gross_map)
+    selected_size_map["trend|high_vol"] = min(selected_size_map.get("trend|high_vol", 0.25), float(high_vol_gross_mult))
+    selected_size_map["range|high_vol"] = min(selected_size_map.get("range|high_vol", 0.10), float(high_vol_gross_mult))
 
     baseline_sim = _simulate_portfolio(
         market=market,
@@ -2481,15 +4199,295 @@ def run_portfolio_validation(
         base_config=base_config,
         cost_cfg=baseline_cost,
         seed=seed,
-        regime_by_ts=regime_by_ts,
+        regime_by_ts=selected_regime_map,
         regime_mode="sizing",
-        regime_size_map=regime_size_map,
+        regime_size_map=selected_size_map,
         regime_turnover_threshold_map=regime_turnover_threshold_map,
         debug_mode=debug_mode,
         max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode=cap_mode,
+        base_cap=base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
         max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=transition_smoother_enabled,
+        gross_step_up=gross_step_up,
+        gross_step_down=gross_step_down,
+        post_halt_cooldown_bars=post_halt_cooldown_bars,
+        post_halt_max_gross=post_halt_max_gross,
+        liquidation_lookback_bars=liquidation_lookback_bars,
+        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
         stop_on_anomaly=stop_on_anomaly,
     )
+    compare_base_cap = float(base_cap if max_turnover_notional_to_equity is None else max_turnover_notional_to_equity)
+    fixed_sim = baseline_sim if cap_mode == "fixed" else _simulate_portfolio(
+        market=market,
+        params=selected_params,
+        base_config=base_config,
+        cost_cfg=baseline_cost,
+        seed=seed + 91_001,
+        regime_by_ts=selected_regime_map,
+        regime_mode="sizing",
+        regime_size_map=selected_size_map,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode="fixed",
+        base_cap=compare_base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=transition_smoother_enabled,
+        gross_step_up=gross_step_up,
+        gross_step_down=gross_step_down,
+        post_halt_cooldown_bars=post_halt_cooldown_bars,
+        post_halt_max_gross=post_halt_max_gross,
+        liquidation_lookback_bars=liquidation_lookback_bars,
+        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
+        stop_on_anomaly=stop_on_anomaly,
+    )
+    adaptive_sim = baseline_sim if cap_mode == "adaptive" else _simulate_portfolio(
+        market=market,
+        params=selected_params,
+        base_config=base_config,
+        cost_cfg=baseline_cost,
+        seed=seed + 91_002,
+        regime_by_ts=selected_regime_map,
+        regime_mode="sizing",
+        regime_size_map=selected_size_map,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode="adaptive",
+        base_cap=compare_base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=transition_smoother_enabled,
+        gross_step_up=gross_step_up,
+        gross_step_down=gross_step_down,
+        post_halt_cooldown_bars=post_halt_cooldown_bars,
+        post_halt_max_gross=post_halt_max_gross,
+        liquidation_lookback_bars=liquidation_lookback_bars,
+        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
+        stop_on_anomaly=stop_on_anomaly,
+    )
+    rate_limit_compare_df = pd.DataFrame(
+        [
+            {
+                "scenario": "fixed_cap",
+                "cap_mode": "fixed",
+                "base_cap": compare_base_cap,
+                **fixed_sim.metrics,
+            },
+            {
+                "scenario": "adaptive_cap",
+                "cap_mode": "adaptive",
+                "base_cap": compare_base_cap,
+                **adaptive_sim.metrics,
+            },
+        ]
+    )
+    no_smoother_sim = baseline_sim if not transition_smoother_enabled else _simulate_portfolio(
+        market=market,
+        params=selected_params,
+        base_config=base_config,
+        cost_cfg=baseline_cost,
+        seed=seed + 91_003,
+        regime_by_ts=selected_regime_map,
+        regime_mode="sizing",
+        regime_size_map=selected_size_map,
+        regime_turnover_threshold_map=regime_turnover_threshold_map,
+        debug_mode=debug_mode,
+        max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode=cap_mode,
+        base_cap=base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
+        max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=False,
+        gross_step_up=1.0,
+        gross_step_down=1.0,
+        post_halt_cooldown_bars=0,
+        post_halt_max_gross=max(selected_params.gross_exposure, 1.0),
+        liquidation_lookback_bars=0,
+        liquidation_lookback_max_gross=max(selected_params.gross_exposure, 1.0),
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
+        stop_on_anomaly=stop_on_anomaly,
+    )
+    off_transition_cause = int((no_smoother_sim.diagnostics.get("negative_equity_cause_counts", {}) or {}).get("negative_equity_due_to_gross_transition", 0))
+    on_transition_cause = int((baseline_sim.diagnostics.get("negative_equity_cause_counts", {}) or {}).get("negative_equity_due_to_gross_transition", 0))
+    transition_compare_df = pd.DataFrame(
+        [
+            {
+                "scenario": "smoother_off",
+                "liquidation_count": float(no_smoother_sim.metrics.get("liquidation_count", 0.0)),
+                "gross_transition_cause_count": float(off_transition_cause),
+                "max_drawdown": float(no_smoother_sim.metrics.get("max_drawdown", 0.0)),
+                "fee_cost_total": float(no_smoother_sim.metrics.get("cost_fee_total", 0.0)),
+                "fee_cost_per_gross_time": float(no_smoother_sim.metrics.get("fee_cost_per_gross_time", 0.0)),
+            },
+            {
+                "scenario": "smoother_on" if transition_smoother_enabled else "current",
+                "liquidation_count": float(baseline_sim.metrics.get("liquidation_count", 0.0)),
+                "gross_transition_cause_count": float(on_transition_cause),
+                "max_drawdown": float(baseline_sim.metrics.get("max_drawdown", 0.0)),
+                "fee_cost_total": float(baseline_sim.metrics.get("cost_fee_total", 0.0)),
+                "fee_cost_per_gross_time": float(baseline_sim.metrics.get("fee_cost_per_gross_time", 0.0)),
+            },
+        ]
+    )
+    dd_curve = baseline_sim.dd_timeline.copy()
+    if dd_curve.empty:
+        peak_mode_compare_df = pd.DataFrame(columns=["peak_mode", "window_bars", "signal_drawdown_max"])
+    else:
+        controller_mode = "rolling" if rolling_peak_window_bars is not None else "absolute"
+        controller_max = float(dd_curve["drawdown"].max()) if "drawdown" in dd_curve.columns else 0.0
+        eq_vals = dd_curve["equity"].to_numpy(dtype=float)
+        abs_peak_vals = np.maximum.accumulate(np.maximum(eq_vals, 1e-9))
+        abs_dd_vals = 1.0 - (np.maximum(eq_vals, 0.0) / np.maximum(abs_peak_vals, 1e-9))
+        abs_max = float(np.max(abs_dd_vals)) if abs_dd_vals.size else 0.0
+        peak_mode_compare_df = pd.DataFrame(
+            [
+                {"peak_mode": controller_mode, "window_bars": rolling_peak_window_bars, "signal_drawdown_max": controller_max},
+                {"peak_mode": "absolute", "window_bars": None, "signal_drawdown_max": abs_max},
+            ]
+        )
     cost_df, cost_sens_df = run_portfolio_cost_stress(
         market=market,
         params=selected_params,
@@ -2504,12 +4502,57 @@ def run_portfolio_validation(
         limit_fill_probability=limit_fill_probability,
         limit_unfilled_penalty_bps=limit_unfilled_penalty_bps,
         seed=seed,
-        regime_by_ts=regime_by_ts,
-        regime_size_map=regime_size_map,
+        regime_by_ts=selected_regime_map,
+        regime_size_map=selected_size_map,
         regime_turnover_threshold_map=regime_turnover_threshold_map,
         debug_mode=debug_mode,
         max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode=cap_mode,
+        base_cap=base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
         max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=transition_smoother_enabled,
+        gross_step_up=gross_step_up,
+        gross_step_down=gross_step_down,
+        post_halt_cooldown_bars=post_halt_cooldown_bars,
+        post_halt_max_gross=post_halt_max_gross,
+        liquidation_lookback_bars=liquidation_lookback_bars,
+        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
     )
     regime_df, regime_table_df = run_portfolio_regime_gating(
         market=market,
@@ -2517,15 +4560,74 @@ def run_portfolio_validation(
         base_config=base_config,
         baseline_cost=baseline_cost,
         seed=seed,
-        regime_by_ts=regime_by_ts,
-        high_vol_gross_mult=high_vol_gross_mult,
+        regime_by_ts=selected_regime_map,
+        base_regime_size_map=selected_size_map,
         regime_turnover_threshold_map=regime_turnover_threshold_map,
         debug_mode=debug_mode,
         max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+        dd_controller_enabled=dd_controller_enabled,
+        dd_thresholds=dd_thresholds,
+        dd_gross_mults=dd_gross_mults,
+        dd_recover_thresholds=dd_recover_thresholds,
+        kill_cooldown_bars=kill_cooldown_bars,
+        disable_new_entry_when_dd=disable_new_entry_when_dd,
+        rolling_peak_window_bars=rolling_peak_window_bars,
+        stage_down_confirm_bars=stage_down_confirm_bars,
+        stage3_down_confirm_bars=stage3_down_confirm_bars,
+        reentry_ramp_steps=reentry_ramp_steps,
+        disable_new_entry_stage=disable_new_entry_stage,
+        dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+        dd_rebalance_mult=dd_rebalance_mult,
+        cap_mode=cap_mode,
+        base_cap=base_cap,
+        cap_min=cap_min,
+        cap_max=cap_max,
+        backlog_thresholds=backlog_thresholds,
+        cap_steps=cap_steps,
+        high_vol_cap_max=high_vol_cap_max,
+        max_turnover_notional_to_equity=max_turnover_notional_to_equity,
+        drift_threshold=drift_threshold,
+        gross_decay_steps=gross_decay_steps,
         max_notional_to_equity_mult=max_notional_to_equity_mult,
+        enable_liquidation=enable_liquidation,
+        equity_floor_ratio=equity_floor_ratio,
+        trading_halt_bars=trading_halt_bars,
+        skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+        transition_smoother_enabled=transition_smoother_enabled,
+        gross_step_up=gross_step_up,
+        gross_step_down=gross_step_down,
+        post_halt_cooldown_bars=post_halt_cooldown_bars,
+        post_halt_max_gross=post_halt_max_gross,
+        liquidation_lookback_bars=liquidation_lookback_bars,
+        liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+        enable_symbol_shock_filters=enable_symbol_shock_filters,
+        max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+        atr_shock_threshold=atr_shock_threshold,
+        gap_shock_threshold=gap_shock_threshold,
+        shock_cooldown_bars=shock_cooldown_bars,
+        shock_mode=shock_mode,
+        shock_weight_mult_atr=shock_weight_mult_atr,
+        shock_weight_mult_gap=shock_weight_mult_gap,
+                    shock_freeze_rebalance=shock_freeze_rebalance,
+                    shock_freeze_min_fraction=shock_freeze_min_fraction,
+                    lookback_score_mode=lookback_score_mode,
     )
 
     bench_df = _portfolio_btc_benchmark(market=market, initial_equity=float(base_config.initial_equity))
+    equity_compare_df = baseline_sim.equity_curve[["timestamp", "equity"]].merge(
+        bench_df.rename(columns={"btc_equity": "btc_equity"}),
+        on="timestamp",
+        how="left",
+    )
+    regime_exposure_df = _build_regime_exposure_table(baseline_sim)
+    regime_code_map = {"trend|low_vol": 0.0, "trend|high_vol": 1.0, "range|low_vol": 2.0, "range|high_vol": 3.0}
+    regime_timeline_df = pd.DataFrame(
+        {
+            "timestamp": market.timestamps.astype(str),
+            "regime": [selected_regime_map.get(_ts_key(ts), "range|low_vol") for ts in market.timestamps],
+        }
+    )
+    regime_timeline_df["regime_code"] = regime_timeline_df["regime"].map(regime_code_map).fillna(0.0)
     btc_mdd = _max_drawdown(bench_df["btc_equity"].to_numpy(dtype=float)) if not bench_df.empty else 0.0
     baseline_metrics = baseline_sim.metrics
     portfolio_mdd = float(baseline_metrics.get("max_drawdown", 0.0))
@@ -2543,8 +4645,18 @@ def run_portfolio_validation(
         "rebalance_bars": float(selected_params.rebalance_bars),
         "k": float(selected_params.k),
         "rank_buffer": float(selected_params.rank_buffer),
+        "high_vol_percentile": float(selected_params.high_vol_percentile),
+        "gross_map": selected_params.gross_map,
+        "off_grace_bars": float(selected_params.off_grace_bars),
+        "phased_entry_steps": float(selected_params.phased_entry_steps),
         "gross_exposure": float(selected_params.gross_exposure),
         "turnover_threshold": float(selected_params.turnover_threshold),
+        "cap_mode": str(cap_mode),
+        "base_cap": float(compare_base_cap),
+        "cap_min": float(cap_min),
+        "cap_max": float(cap_max),
+        "high_vol_cap_max": float(high_vol_cap_max),
+        "dd_controller_enabled": bool(dd_controller_enabled),
         "net_pnl": float(baseline_metrics.get("net_pnl", 0.0)),
         "cagr": float(baseline_metrics.get("cagr", 0.0)),
         "portfolio_max_drawdown": portfolio_mdd,
@@ -2568,6 +4680,38 @@ def run_portfolio_validation(
         "btc_long_max_drawdown": btc_mdd,
         "mdd_better_or_equal_btc": bool(portfolio_mdd >= btc_mdd),
         "skip_reasons_json": json.dumps(baseline_sim.diagnostics.get("skip_reasons", {}), sort_keys=True),
+        "off_to_on_count": float(baseline_metrics.get("off_to_on_count", 0.0)),
+        "on_to_off_count": float(baseline_metrics.get("on_to_off_count", 0.0)),
+        "gross_change_turnover": float(baseline_metrics.get("gross_change_turnover", 0.0)),
+        "fee_cost_total": float(baseline_metrics.get("cost_fee_total", 0.0)),
+        "fee_cost_per_gross_time": float(baseline_metrics.get("fee_cost_per_gross_time", 0.0)),
+        "rebalance_skipped_due_to_shock_count": float(baseline_metrics.get("rebalance_skipped_due_to_shock_count", 0.0)),
+        "rebalance_skipped_due_to_shock_ratio": float(baseline_metrics.get("rebalance_skipped_due_to_shock_ratio", 0.0)),
+        "shock_active_bars_count": float(baseline_metrics.get("shock_active_bars_count", 0.0)),
+        "cap_hit_count": float(baseline_metrics.get("cap_hit_count", 0.0)),
+        "avg_executed_fraction": float(baseline_metrics.get("avg_executed_fraction", 0.0)),
+        "avg_backlog_notional": float(baseline_metrics.get("avg_backlog_notional", 0.0)),
+        "max_backlog_notional": float(baseline_metrics.get("max_backlog_notional", 0.0)),
+        "avg_backlog_ratio": float(baseline_metrics.get("avg_backlog_ratio", 0.0)),
+        "max_backlog_ratio": float(baseline_metrics.get("max_backlog_ratio", 0.0)),
+        "avg_cap_used": float(baseline_metrics.get("avg_cap_used", 0.0)),
+        "reduce_first_execution_ratio": float(baseline_metrics.get("reduce_first_execution_ratio", 0.0)),
+        "equity_zero_or_negative_count": float(baseline_metrics.get("equity_zero_or_negative_count", 0.0)),
+        "drift_force_count": float(baseline_metrics.get("drift_force_count", 0.0)),
+        "kill_switch_events": float(baseline_metrics.get("kill_switch_events", 0.0)),
+        "kill_switch_total_bars": float(baseline_metrics.get("kill_switch_total_bars", 0.0)),
+        "stage_3_share": float(baseline_metrics.get("stage_3_share", 0.0)),
+        "stage_3_longest_streak_bars": float(baseline_metrics.get("stage_3_longest_streak_bars", 0.0)),
+        "stage_transitions_up": float(baseline_metrics.get("stage_transitions_up", 0.0)),
+        "stage_transitions_down": float(baseline_metrics.get("stage_transitions_down", 0.0)),
+        "liquidation_count": float(baseline_metrics.get("liquidation_count", 0.0)),
+        "first_liquidation_ts": (
+            None
+            if baseline_sim.liquidation_events.empty
+            else str(baseline_sim.liquidation_events.iloc[0].get("timestamp"))
+        ),
+        "transition_cause_count": float((baseline_sim.diagnostics.get("negative_equity_cause_counts", {}) or {}).get("negative_equity_due_to_gross_transition", 0)),
+        "liquidation_after_halt_count": float(baseline_sim.diagnostics.get("liquidation_after_halt_count", 0)),
     }
     summary["gate_wfo"] = bool(float(summary["oos_positive_ratio"]) >= 0.60)
     summary["gate_cost"] = bool(float(summary["cost_positive_ratio"]) >= 0.30)
@@ -2591,7 +4735,52 @@ def run_portfolio_validation(
         "safety": {
             "debug_mode": debug_mode,
             "max_cost_ratio_per_bar": max_cost_ratio_per_bar,
+            "dd_controller_enabled": dd_controller_enabled,
+            "dd_thresholds": list(dd_thresholds),
+            "dd_gross_mults": list(dd_gross_mults),
+            "dd_recover_thresholds": list(dd_recover_thresholds),
+            "kill_cooldown_bars": kill_cooldown_bars,
+            "disable_new_entry_when_dd": disable_new_entry_when_dd,
+            "rolling_peak_window_bars": rolling_peak_window_bars,
+            "stage_down_confirm_bars": stage_down_confirm_bars,
+            "stage3_down_confirm_bars": stage3_down_confirm_bars,
+            "reentry_ramp_steps": reentry_ramp_steps,
+            "disable_new_entry_stage": disable_new_entry_stage,
+            "dd_turnover_threshold_mult": dd_turnover_threshold_mult,
+            "dd_rebalance_mult": dd_rebalance_mult,
+            "cap_mode": cap_mode,
+            "base_cap": base_cap,
+            "cap_min": cap_min,
+            "cap_max": cap_max,
+            "backlog_thresholds": list(backlog_thresholds),
+            "cap_steps": list(cap_steps),
+            "high_vol_cap_max": high_vol_cap_max,
+            "max_turnover_notional_to_equity": max_turnover_notional_to_equity,
+            "drift_threshold": drift_threshold,
+            "gross_decay_steps": gross_decay_steps,
             "max_notional_to_equity_mult": max_notional_to_equity_mult,
+            "enable_liquidation": enable_liquidation,
+            "equity_floor_ratio": equity_floor_ratio,
+            "trading_halt_bars": trading_halt_bars,
+            "skip_trades_if_cost_exceeds_equity_ratio": skip_trades_if_cost_exceeds_equity_ratio,
+            "transition_smoother_enabled": transition_smoother_enabled,
+            "gross_step_up": gross_step_up,
+            "gross_step_down": gross_step_down,
+            "post_halt_cooldown_bars": post_halt_cooldown_bars,
+            "post_halt_max_gross": post_halt_max_gross,
+            "liquidation_lookback_bars": liquidation_lookback_bars,
+            "liquidation_lookback_max_gross": liquidation_lookback_max_gross,
+            "enable_symbol_shock_filters": enable_symbol_shock_filters,
+            "max_abs_weight_per_symbol": max_abs_weight_per_symbol,
+            "atr_shock_threshold": atr_shock_threshold,
+            "gap_shock_threshold": gap_shock_threshold,
+            "shock_cooldown_bars": shock_cooldown_bars,
+            "shock_mode": shock_mode,
+            "shock_weight_mult_atr": shock_weight_mult_atr,
+            "shock_weight_mult_gap": shock_weight_mult_gap,
+            "shock_freeze_rebalance": shock_freeze_rebalance,
+            "shock_freeze_min_fraction": shock_freeze_min_fraction,
+            "lookback_score_mode": lookback_score_mode,
             "stop_on_anomaly": stop_on_anomaly,
             "regime_turnover_threshold_map": regime_turnover_threshold_map,
         },
@@ -2622,6 +4811,9 @@ def run_portfolio_validation(
             "vol_lookback": regime_vol_lookback,
             "vol_percentile": regime_vol_percentile,
             "high_vol_gross_mult": high_vol_gross_mult,
+            "high_vol_percentile_candidates": pct_list,
+            "gross_map_candidates": gross_maps,
+            "selected_regime_size_map": selected_size_map,
         },
     }
 
@@ -2631,25 +4823,59 @@ def run_portfolio_validation(
     save_json({"events": baseline_sim.debug_dump}, run_dir / "debug_dump.json")
     save_dataframe_csv(pd.DataFrame({"metric": list(summary.keys()), "value": list(summary.values())}), run_dir / "summary.csv")
     save_dataframe_csv(baseline_sim.equity_curve, run_dir / "portfolio_equity_curve.csv")
+    save_dataframe_csv(baseline_sim.dd_timeline, run_dir / "dd_timeline.csv")
+    save_dataframe_csv(baseline_sim.gross_target_applied, run_dir / "gross_target_vs_applied.csv")
+    save_dataframe_csv(baseline_sim.excluded_symbols, run_dir / "excluded_symbols.csv")
+    save_dataframe_csv(baseline_sim.symbol_risk_caps, run_dir / "symbol_risk_caps.csv")
     save_dataframe_csv(baseline_sim.positions, run_dir / "portfolio_positions.csv")
     save_dataframe_csv(baseline_sim.turnover, run_dir / "turnover.csv")
     save_dataframe_csv(baseline_sim.cost_breakdown, run_dir / "cost_breakdown.csv")
+    save_dataframe_csv(baseline_sim.liquidation_events, run_dir / "liquidation_events.csv")
     save_dataframe_csv(cost_df, run_dir / "cost_stress.csv")
     save_dataframe_csv(cost_sens_df, run_dir / "cost_sensitivity.csv")
+    save_dataframe_csv(rate_limit_compare_df, run_dir / "rate_limit_comparison.csv")
+    save_dataframe_csv(transition_compare_df, run_dir / "transition_smoother_comparison.csv")
+    save_dataframe_csv(peak_mode_compare_df, run_dir / "peak_mode_comparison.csv")
     save_dataframe_csv(wf_df, run_dir / "walk_forward_windows.csv")
     save_dataframe_csv(wf_candidates_df, run_dir / "walk_forward_candidates.csv")
     save_dataframe_csv(regime_df, run_dir / "regime_scenarios.csv")
     save_dataframe_csv(regime_table_df, run_dir / "regime_table.csv")
+    save_dataframe_csv(regime_exposure_df, run_dir / "regime_exposure_table.csv")
+    save_dataframe_csv(regime_timeline_df, run_dir / "regime_timeline.csv")
     save_dataframe_csv(bench_df, run_dir / "benchmark_btc_buyhold.csv")
+    save_dataframe_csv(equity_compare_df, run_dir / "equity_vs_btc.csv")
 
     plots_dir = run_dir / "plots"
     save_line_chart(plots_dir / "portfolio_equity_curve.png", baseline_sim.equity_curve["equity"].tolist() if not baseline_sim.equity_curve.empty else [])
+    save_line_chart(
+        plots_dir / "drawdown_line.png",
+        baseline_sim.dd_timeline["drawdown"].tolist() if not baseline_sim.dd_timeline.empty and "drawdown" in baseline_sim.dd_timeline.columns else [],
+    )
+    save_line_chart(
+        plots_dir / "effective_gross_line.png",
+        baseline_sim.dd_timeline["effective_gross"].tolist() if not baseline_sim.dd_timeline.empty and "effective_gross" in baseline_sim.dd_timeline.columns else [],
+    )
+    save_dual_line_chart(
+        plots_dir / "gross_target_vs_applied.png",
+        baseline_sim.gross_target_applied["target_gross"].tolist() if not baseline_sim.gross_target_applied.empty and "target_gross" in baseline_sim.gross_target_applied.columns else [],
+        baseline_sim.gross_target_applied["applied_gross"].tolist() if not baseline_sim.gross_target_applied.empty and "applied_gross" in baseline_sim.gross_target_applied.columns else [],
+    )
+    save_dual_line_chart(
+        plots_dir / "equity_vs_btc.png",
+        equity_compare_df["equity"].tolist() if not equity_compare_df.empty else [],
+        equity_compare_df["btc_equity"].tolist() if not equity_compare_df.empty else [],
+    )
     save_line_chart(plots_dir / "cost_net_pnl_line.png", cost_df["net_pnl"].tolist() if not cost_df.empty else [])
     save_histogram(plots_dir / "walk_forward_oos_hist.png", wf_df["best_test_net_pnl"].tolist() if not wf_df.empty else [])
     save_bar_chart(plots_dir / "regime_net_pnl_bar.png", regime_table_df["net_pnl"].tolist() if not regime_table_df.empty else [])
+    save_bar_chart(plots_dir / "regime_timeline.png", regime_timeline_df["regime_code"].tolist() if not regime_timeline_df.empty else [])
     save_histogram(
         plots_dir / "turnover_hist.png",
         baseline_sim.turnover["turnover_ratio"].tolist() if not baseline_sim.turnover.empty else [],
+    )
+    save_line_chart(
+        plots_dir / "backlog_ratio_line.png",
+        baseline_sim.turnover["backlog_ratio"].tolist() if not baseline_sim.turnover.empty and "backlog_ratio" in baseline_sim.turnover.columns else [],
     )
     _portfolio_report(
         run_dir=run_dir,
@@ -2660,6 +4886,11 @@ def run_portfolio_validation(
         cost_df=cost_df,
         wf_df=wf_df,
         regime_table_df=regime_table_df,
+        regime_exposure_df=regime_exposure_df,
+        rate_limit_compare_df=rate_limit_compare_df,
+        transition_compare_df=transition_compare_df,
+        peak_mode_compare_df=peak_mode_compare_df,
+        liquidation_df=baseline_sim.liquidation_events,
     )
 
     files = {
@@ -2670,12 +4901,23 @@ def run_portfolio_validation(
         "debug_dump_json": str(run_dir / "debug_dump.json"),
         "report_md": str(run_dir / "report.md"),
         "portfolio_equity_curve_csv": str(run_dir / "portfolio_equity_curve.csv"),
+        "dd_timeline_csv": str(run_dir / "dd_timeline.csv"),
+        "gross_target_vs_applied_csv": str(run_dir / "gross_target_vs_applied.csv"),
+        "excluded_symbols_csv": str(run_dir / "excluded_symbols.csv"),
+        "symbol_risk_caps_csv": str(run_dir / "symbol_risk_caps.csv"),
         "portfolio_positions_csv": str(run_dir / "portfolio_positions.csv"),
         "turnover_csv": str(run_dir / "turnover.csv"),
         "cost_breakdown_csv": str(run_dir / "cost_breakdown.csv"),
+        "liquidation_events_csv": str(run_dir / "liquidation_events.csv"),
         "cost_stress_csv": str(run_dir / "cost_stress.csv"),
+        "rate_limit_comparison_csv": str(run_dir / "rate_limit_comparison.csv"),
+        "transition_smoother_comparison_csv": str(run_dir / "transition_smoother_comparison.csv"),
+        "peak_mode_comparison_csv": str(run_dir / "peak_mode_comparison.csv"),
         "walk_forward_csv": str(run_dir / "walk_forward_windows.csv"),
         "regime_table_csv": str(run_dir / "regime_table.csv"),
+        "regime_exposure_csv": str(run_dir / "regime_exposure_table.csv"),
+        "regime_timeline_csv": str(run_dir / "regime_timeline.csv"),
+        "equity_vs_btc_csv": str(run_dir / "equity_vs_btc.csv"),
         "btc_benchmark_csv": str(run_dir / "benchmark_btc_buyhold.csv"),
     }
     return PortfolioRunOutput(run_id=run_id, run_dir=run_dir, summary=summary, files=files)
@@ -2957,7 +5199,7 @@ def default_system_candidates() -> list[SystemCandidate]:
                 "risk_template": "balanced",
             },
             walk_grid_path="config/grids/carry_momentum_narrow.yaml",
-            notes="Track A: direction dependency 완화, BTC 베타 헷지 프록시 점검",
+            notes="Track A: direction dependency mitigation with BTC beta hedge proxy checks.",
         ),
         SystemCandidate(
             system_id="B_regime_switch_trend_range",
@@ -2980,7 +5222,7 @@ def default_system_candidates() -> list[SystemCandidate]:
                 "risk_template": "defensive",
             },
             walk_grid_path="config/grids/regime_switch_narrow.yaml",
-            notes="Track B: trend/range 분리 운용 + high-vol 사이징 축소",
+            notes="Track B: split trend/range operation with reduced sizing in high-vol regimes.",
         ),
         SystemCandidate(
             system_id="C_breakout_atr_risk_template",
@@ -2997,7 +5239,7 @@ def default_system_candidates() -> list[SystemCandidate]:
                 "risk_template": "aggressive",
             },
             walk_grid_path="config/grids/breakout_atr_narrow.yaml",
-            notes="Track C: 고정 리스크 템플릿 + 지정가/시장가 혼합 비용 강건성 점검",
+            notes="Track C: fixed risk template plus limit/market execution robustness checks.",
         ),
     ]
 
@@ -3068,7 +5310,7 @@ def _evaluate_candidate_gates(candidate_dir: Path, symbol_rows: list[dict[str, A
     rows_df = pd.DataFrame(symbol_rows)
     if rows_df.empty:
         return {
-            "verdict": "불합격",
+            "verdict": "FAIL",
             "gate_wfo_two_symbols": False,
             "gate_cost_robust": False,
             "gate_regime_consistency": False,
@@ -3085,11 +5327,11 @@ def _evaluate_candidate_gates(candidate_dir: Path, symbol_rows: list[dict[str, A
     gate_trade = bool((rows_df["cost_median_trade_count"] >= 200).all())
 
     if gate_wfo and gate_cost and gate_regime and gate_trade:
-        verdict = "합격"
+        verdict = "PASS"
     elif (gate_wfo and gate_regime) or (gate_cost and gate_trade):
-        verdict = "불확실"
+        verdict = "MIXED"
     else:
-        verdict = "불합격"
+        verdict = "FAIL"
 
     return {
         "verdict": verdict,
@@ -3291,3 +5533,5 @@ __all__ = [
     "_parse_float_list",
     "_parse_int_list",
 ]
+
+

@@ -1,0 +1,13 @@
+cap_mode:
+  - fixed
+  - adaptive
+
+high_vol_cap_max:
+  - 0.30
+  - 0.35
+
+backlog_thresholds:
+  - [0.25, 0.50, 0.75]
+
+cap_steps:
+  - [0.25, 0.30, 0.35, 0.40]

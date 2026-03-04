@@ -62,6 +62,13 @@ def _parse_symbols(symbols: str) -> list[str]:
     return parsed
 
 
+def _parse_optional_float(raw: str) -> float | None:
+    text = str(raw).strip().lower()
+    if text in {"", "none", "off", "null"}:
+        return None
+    return float(text)
+
+
 def _build_base_backtest_config(cfg: AppConfig) -> BacktestConfig:
     return BacktestConfig(
         symbol=cfg.symbol,
@@ -504,9 +511,65 @@ def experiments(
     turnover_threshold_low_vol: float | None = typer.Option(None, min=0.0, max=2.0, help="Optional low-vol turnover threshold"),
     vol_lookback: int = typer.Option(96, min=5, help="Portfolio volatility lookback in bars"),
     rank_buffer: str = typer.Option("0,1", help="Portfolio rank hysteresis buffer list"),
+    high_vol_pcts: str = typer.Option("0.75,0.85,0.90", help="Portfolio high-vol percentile candidates"),
+    gross_maps: str = typer.Option("highvol_050,balanced,conservative,off_range_highvol,ultra_defensive", help="Portfolio regime gross maps"),
+    off_grace_bars: str = typer.Option("0,24", help="OFF regime grace bars list"),
+    phased_entry_steps: str = typer.Option("1,2", help="Phased entry steps list"),
     debug_mode: bool = typer.Option(False, help="Enable portfolio debug diagnostics"),
     stop_on_anomaly: bool = typer.Option(False, help="Raise on portfolio anomalies when debug_mode is enabled"),
     max_cost_ratio_per_bar: float = typer.Option(0.05, min=0.0, max=1.0, help="Per-bar cost safety clamp vs equity"),
+    enable_liquidation: bool = typer.Option(True, "--enable-liquidation/--disable-liquidation", help="Enable equity-floor liquidation and trading halt"),
+    equity_floor_ratio: float = typer.Option(0.01, min=0.0, max=0.5, help="Equity floor ratio vs initial equity"),
+    trading_halt_bars: int = typer.Option(168, min=0, help="Trading halt bars after liquidation"),
+    skip_trades_if_cost_exceeds_equity_ratio: float = typer.Option(0.02, min=0.0, max=1.0, help="Skip trades when conservative cost estimate exceeds this equity ratio"),
+    transition_smoother: bool = typer.Option(False, "--transition-smoother/--no-transition-smoother", help="Enable gross transition smoothing"),
+    gross_step_up: float = typer.Option(0.10, min=0.0, max=1.0, help="Max gross increase per rebalance"),
+    gross_step_down: float = typer.Option(0.25, min=0.0, max=1.0, help="Max gross decrease per rebalance"),
+    post_halt_cooldown_bars: int = typer.Option(168, min=0, help="Extra cooldown bars after halt release"),
+    post_halt_max_gross: float = typer.Option(0.15, min=0.0, max=2.0, help="Max gross during post-halt cooldown"),
+    liquidation_lookback_bars: int = typer.Option(720, min=0, help="Liquidation lookback bars for churn gate"),
+    liquidation_lookback_max_gross: float = typer.Option(0.15, min=0.0, max=2.0, help="Max gross if liquidation seen in lookback"),
+    max_abs_weight_per_symbol: float = typer.Option(0.12, min=0.0, max=1.0, help="Absolute per-symbol target weight cap"),
+    atr_shock_threshold: float = typer.Option(2.5, min=0.0, max=20.0, help="ATR shock threshold (ATR24h/ATR14d)"),
+    gap_shock_threshold: float = typer.Option(0.10, min=0.0, max=1.0, help="1-bar return shock threshold"),
+    shock_cooldown_bars: int = typer.Option(72, min=0, help="Bars to keep shock effect active"),
+    shock_mode: str = typer.Option("downweight", help="Shock handling mode: exclude | downweight"),
+    shock_weight_mult_atr: float = typer.Option(0.25, min=0.0, max=1.0, help="Weight multiplier when ATR shock is active in downweight mode"),
+    shock_weight_mult_gap: float = typer.Option(0.10, min=0.0, max=1.0, help="Weight multiplier when gap shock is active in downweight mode"),
+    shock_freeze_rebalance: bool | None = typer.Option(
+        None,
+        "--shock-freeze-rebalance/--no-shock-freeze-rebalance",
+        help="Freeze rebalances on shock-active bars (default: ON for shock-mode downweight)",
+    ),
+    shock_freeze_min_fraction: float = typer.Option(
+        0.30,
+        min=0.0,
+        max=1.0,
+        help="Shock-active threshold as fraction of shocked symbols in basket",
+    ),
+    enable_symbol_shock_filters: bool = typer.Option(True, "--enable-symbol-shock-filters/--disable-symbol-shock-filters", help="Enable per-symbol ATR/gap shock filters"),
+    cap_mode: str = typer.Option("adaptive", help="Turnover cap mode: fixed | adaptive"),
+    base_cap: float = typer.Option(0.25, min=0.0, max=2.0, help="Base turnover cap (notional/equity)"),
+    cap_min: float = typer.Option(0.20, min=0.0, max=2.0, help="Adaptive cap lower bound"),
+    cap_max: float = typer.Option(0.40, min=0.0, max=2.0, help="Adaptive cap upper bound"),
+    backlog_thresholds: str = typer.Option("0.25,0.50,0.75", help="Adaptive backlog ratio thresholds (3 floats)"),
+    cap_steps: str = typer.Option("0.25,0.30,0.35,0.40", help="Adaptive cap steps (4 floats)"),
+    high_vol_cap_max: float = typer.Option(0.30, min=0.0, max=2.0, help="Adaptive cap max in high-vol regime"),
+    max_turnover_notional_to_equity: str = typer.Option("0.25", help="Per-rebalance turnover cap as equity multiple (use 'off' to disable)"),
+    drift_threshold: str = typer.Option("0.35", help="Force-rebalance drift threshold L1 distance (use 'off' to disable)"),
+    gross_decay_steps: int = typer.Option(3, min=1, max=20, help="OFF regime unwind steps (reduce-only)"),
+    dd_controller: bool = typer.Option(True, "--dd-controller/--no-dd-controller", help="Enable drawdown-based deleveraging / kill switch"),
+    dd_thresholds: str = typer.Option("0.10,0.20,0.30,0.40", help="DD stage enter thresholds (4 floats)"),
+    dd_gross_mults: str = typer.Option("1.0,0.7,0.5,0.3,0.0", help="DD stage gross multipliers (5 floats)"),
+    dd_recover_thresholds: str = typer.Option("0.08,0.16,0.24,0.32", help="DD stage recover thresholds (4 floats)"),
+    kill_cooldown_bars: int = typer.Option(168, min=0, help="Kill-switch minimum hold bars before recovery"),
+    disable_new_entry_when_dd: bool = typer.Option(True, "--disable-new-entry-when-dd/--allow-new-entry-when-dd", help="Block new entries while in DD stages"),
+    rolling_peak_window_bars: str = typer.Option("720", help="Rolling peak window bars for DD (use 'off' for absolute peak)"),
+    stage_down_confirm_bars: int = typer.Option(48, min=1, help="Bars to confirm stage-down recovery"),
+    stage3_down_confirm_bars: int = typer.Option(96, min=1, help="Bars to confirm stage3->stage2 recovery"),
+    disable_new_entry_stage: int = typer.Option(3, min=1, help="Disable new entry from this DD stage and above"),
+    dd_turnover_threshold_mult: float = typer.Option(1.5, min=1.0, max=10.0, help="Turnover-threshold multiplier in DD stage>=2"),
+    dd_rebalance_mult: str = typer.Option("off", help="Optional rebalance interval multiplier in DD stage>=2 (use 'off')"),
     max_notional_to_equity_mult: float = typer.Option(3.0, min=1.0, max=20.0, help="Per-bar turnover notional cap multiple"),
     high_vol_gross_mult: float = typer.Option(0.5, min=0.0, max=1.0, help="Regime sizing multiplier in high vol"),
     trend_ema_span: int = typer.Option(48, min=2, help="Regime trend EMA span"),
@@ -536,6 +599,40 @@ def experiments(
         for model in parsed_signal_models:
             if model not in {"momentum", "mean_reversion"}:
                 raise typer.BadParameter("--signal-models supports only momentum,mean_reversion")
+        parsed_gross_maps = [x.strip().lower() for x in gross_maps.split(",") if x.strip()]
+        if not parsed_gross_maps:
+            raise typer.BadParameter("--gross-maps must include at least one map name")
+        parsed_cap_mode = cap_mode.strip().lower()
+        if parsed_cap_mode not in {"fixed", "adaptive"}:
+            raise typer.BadParameter("--cap-mode must be one of: fixed, adaptive")
+        parsed_shock_mode = shock_mode.strip().lower()
+        if parsed_shock_mode not in {"exclude", "downweight"}:
+            raise typer.BadParameter("--shock-mode must be one of: exclude, downweight")
+        parsed_shock_freeze_rebalance = shock_freeze_rebalance
+        if parsed_shock_freeze_rebalance is None:
+            parsed_shock_freeze_rebalance = bool(parsed_shock_mode == "downweight")
+        try:
+            parsed_turnover_cap = _parse_optional_float(max_turnover_notional_to_equity)
+            parsed_drift_threshold = _parse_optional_float(drift_threshold)
+            parsed_rolling_peak_window = _parse_optional_float(rolling_peak_window_bars)
+            parsed_dd_rebalance_mult = _parse_optional_float(dd_rebalance_mult)
+            parsed_backlog_thresholds = _parse_float_list(backlog_thresholds)
+            parsed_cap_steps = _parse_float_list(cap_steps)
+            parsed_dd_thresholds = _parse_float_list(dd_thresholds)
+            parsed_dd_gross_mults = _parse_float_list(dd_gross_mults)
+            parsed_dd_recover_thresholds = _parse_float_list(dd_recover_thresholds)
+        except ValueError as exc:
+            raise typer.BadParameter(f"Invalid float option: {exc}") from exc
+        if len(parsed_backlog_thresholds) != 3:
+            raise typer.BadParameter("--backlog-thresholds must contain exactly 3 floats")
+        if len(parsed_cap_steps) != 4:
+            raise typer.BadParameter("--cap-steps must contain exactly 4 floats")
+        if len(parsed_dd_thresholds) != 4:
+            raise typer.BadParameter("--dd-thresholds must contain exactly 4 floats")
+        if len(parsed_dd_gross_mults) != 5:
+            raise typer.BadParameter("--dd-gross-mults must contain exactly 5 floats")
+        if len(parsed_dd_recover_thresholds) != 4:
+            raise typer.BadParameter("--dd-recover-thresholds must contain exactly 4 floats")
 
         cfg = AppConfig.from_env().model_copy(update={"symbol": parsed_symbols[0], "timeframe": timeframe})
         base_bt_cfg = replace(_build_base_backtest_config(cfg), persist_to_db=False)
@@ -556,6 +653,10 @@ def experiments(
             k_values=_parse_int_list(k),
             gross_values=_parse_float_list(gross),
             rank_buffers=_parse_int_list(rank_buffer),
+            high_vol_percentiles=_parse_float_list(high_vol_pcts),
+            gross_maps=parsed_gross_maps,
+            off_grace_bars_list=_parse_int_list(off_grace_bars),
+            phased_entry_steps_list=_parse_int_list(phased_entry_steps),
             turnover_threshold=turnover_threshold,
             turnover_threshold_high_vol=turnover_threshold_high_vol,
             turnover_threshold_low_vol=turnover_threshold_low_vol,
@@ -584,7 +685,62 @@ def experiments(
             high_vol_gross_mult=high_vol_gross_mult,
             debug_mode=debug_mode,
             max_cost_ratio_per_bar=max_cost_ratio_per_bar,
+            dd_controller_enabled=dd_controller,
+            dd_thresholds=(parsed_dd_thresholds[0], parsed_dd_thresholds[1], parsed_dd_thresholds[2], parsed_dd_thresholds[3]),
+            dd_gross_mults=(
+                parsed_dd_gross_mults[0],
+                parsed_dd_gross_mults[1],
+                parsed_dd_gross_mults[2],
+                parsed_dd_gross_mults[3],
+                parsed_dd_gross_mults[4],
+            ),
+            dd_recover_thresholds=(
+                parsed_dd_recover_thresholds[0],
+                parsed_dd_recover_thresholds[1],
+                parsed_dd_recover_thresholds[2],
+                parsed_dd_recover_thresholds[3],
+            ),
+            kill_cooldown_bars=kill_cooldown_bars,
+            disable_new_entry_when_dd=disable_new_entry_when_dd,
+            rolling_peak_window_bars=None if parsed_rolling_peak_window is None else int(parsed_rolling_peak_window),
+            stage_down_confirm_bars=stage_down_confirm_bars,
+            stage3_down_confirm_bars=stage3_down_confirm_bars,
+            reentry_ramp_steps=3,
+            disable_new_entry_stage=disable_new_entry_stage,
+            dd_turnover_threshold_mult=dd_turnover_threshold_mult,
+            dd_rebalance_mult=parsed_dd_rebalance_mult,
+            cap_mode=parsed_cap_mode,  # type: ignore[arg-type]
+            base_cap=base_cap,
+            cap_min=cap_min,
+            cap_max=cap_max,
+            backlog_thresholds=(parsed_backlog_thresholds[0], parsed_backlog_thresholds[1], parsed_backlog_thresholds[2]),
+            cap_steps=(parsed_cap_steps[0], parsed_cap_steps[1], parsed_cap_steps[2], parsed_cap_steps[3]),
+            high_vol_cap_max=high_vol_cap_max,
+            max_turnover_notional_to_equity=parsed_turnover_cap,
+            drift_threshold=parsed_drift_threshold,
+            gross_decay_steps=gross_decay_steps,
             max_notional_to_equity_mult=max_notional_to_equity_mult,
+            enable_liquidation=enable_liquidation,
+            equity_floor_ratio=equity_floor_ratio,
+            trading_halt_bars=trading_halt_bars,
+            skip_trades_if_cost_exceeds_equity_ratio=skip_trades_if_cost_exceeds_equity_ratio,
+            transition_smoother_enabled=transition_smoother,
+            gross_step_up=gross_step_up,
+            gross_step_down=gross_step_down,
+            post_halt_cooldown_bars=post_halt_cooldown_bars,
+            post_halt_max_gross=post_halt_max_gross,
+            liquidation_lookback_bars=liquidation_lookback_bars,
+            liquidation_lookback_max_gross=liquidation_lookback_max_gross,
+            enable_symbol_shock_filters=enable_symbol_shock_filters,
+            max_abs_weight_per_symbol=max_abs_weight_per_symbol,
+            atr_shock_threshold=atr_shock_threshold,
+            gap_shock_threshold=gap_shock_threshold,
+            shock_cooldown_bars=shock_cooldown_bars,
+            shock_mode=parsed_shock_mode,  # type: ignore[arg-type]
+            shock_weight_mult_atr=shock_weight_mult_atr,
+            shock_weight_mult_gap=shock_weight_mult_gap,
+            shock_freeze_rebalance=parsed_shock_freeze_rebalance,
+            shock_freeze_min_fraction=shock_freeze_min_fraction,
             stop_on_anomaly=stop_on_anomaly,
         )
         table = Table(title="Portfolio Experiment Summary")

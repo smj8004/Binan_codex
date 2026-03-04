@@ -1,0 +1,12 @@
+max_turnover_notional_to_equity:
+  - 0.10
+  - 0.25
+  - 0.40
+
+drift_threshold:
+  - null
+  - 0.35
+
+gross_decay_steps:
+  - 1
+  - 3
