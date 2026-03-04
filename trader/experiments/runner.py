@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import math
@@ -834,6 +834,45 @@ def _calc_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(period, min_periods=1).mean()
 
 
+def _calc_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    up_move = df["high"].diff()
+    down_move = -df["low"].diff()
+    plus_dm = up_move.where((up_move > down_move) & (up_move > 0.0), 0.0).fillna(0.0)
+    minus_dm = down_move.where((down_move > up_move) & (down_move > 0.0), 0.0).fillna(0.0)
+    atr = _calc_atr(df, period=max(int(period), 2)).replace(0.0, np.nan)
+    plus_di = 100.0 * plus_dm.rolling(max(int(period), 2), min_periods=1).mean() / atr
+    minus_di = 100.0 * minus_dm.rolling(max(int(period), 2), min_periods=1).mean() / atr
+    dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0.0, np.nan)
+    return dx.rolling(max(int(period), 2), min_periods=1).mean().fillna(0.0)
+
+
+def _build_extreme_no_trade_map(
+    df: pd.DataFrame,
+    *,
+    trend_ema_span: int,
+    trend_slope_lookback: int,
+    trend_slope_threshold: float,
+    atr_period: int,
+    vol_lookback: int,
+    vol_percentile: float,
+    non_trend_logic: Literal["or", "and"] = "or",
+) -> dict[str, bool]:
+    ema = df["close"].ewm(span=max(trend_ema_span, 2), adjust=False).mean()
+    slope = ema.pct_change(max(trend_slope_lookback, 1)).fillna(0.0)
+    atr = _calc_atr(df, period=max(atr_period, 2))
+    vol_cut = atr.rolling(max(vol_lookback, 5), min_periods=max(5, vol_lookback // 5)).quantile(vol_percentile)
+    vol_cut = vol_cut.fillna(atr.median())
+    high_vol = atr >= vol_cut
+    adx = _calc_adx(df, period=max(atr_period, 2))
+    logic = str(non_trend_logic).strip().lower()
+    if logic == "and":
+        non_trend = (adx < 20.0) & (slope.abs() < float(trend_slope_threshold))
+    else:
+        non_trend = (adx < 20.0) | (slope.abs() < float(trend_slope_threshold))
+    extreme = (high_vol & non_trend).fillna(False)
+    return {_ts_key(ts): bool(flag) for ts, flag in zip(df["timestamp"], extreme)}
+
+
 def _load_grid_file(path: str) -> dict[str, list[Any]]:
     text = Path(path).read_text(encoding="utf-8")
     try:
@@ -1135,6 +1174,10 @@ def _simulate_portfolio(
     shock_weight_mult_gap: float = 0.10,
     shock_freeze_rebalance: bool | None = None,
     shock_freeze_min_fraction: float = 0.30,
+    extreme_no_trade: bool = False,
+    extreme_by_ts: dict[str, bool] | None = None,
+    extreme_regime_mode: Literal["skip", "delever"] = "skip",
+    extreme_gross_mult: float = 0.5,
     lookback_score_mode: Literal["single", "median_3"] = "single",
     stop_on_anomaly: bool = False,
 ) -> PortfolioSimResult:
@@ -1186,6 +1229,12 @@ def _simulate_portfolio(
     else:
         shock_freeze_rebalance = bool(shock_freeze_rebalance)
     shock_freeze_min_fraction = min(max(float(shock_freeze_min_fraction), 0.0), 1.0)
+    extreme_no_trade = bool(extreme_no_trade)
+    extreme_by_ts = extreme_by_ts or {}
+    extreme_regime_mode = str(extreme_regime_mode).strip().lower()  # type: ignore[assignment]
+    if extreme_regime_mode not in {"skip", "delever"}:
+        extreme_regime_mode = "skip"  # type: ignore[assignment]
+    extreme_gross_mult = min(max(float(extreme_gross_mult), 0.0), 1.0)
     lookback_score_mode = str(lookback_score_mode).strip().lower()  # type: ignore[assignment]
     if lookback_score_mode not in {"single", "median_3"}:
         lookback_score_mode = "single"  # type: ignore[assignment]
@@ -1315,6 +1364,9 @@ def _simulate_portfolio(
     any_shock_active_bar_count = 0
     shock_active_bars_count = 0
     rebalance_skipped_due_to_shock_count = 0
+    extreme_no_trade_bars_count = 0
+    rebalance_skipped_due_to_extreme_count = 0
+    rebalance_skipped_due_to_final_count = 0
     liquidation_after_halt_count = 0
     gross_transition_magnitude_sum = 0.0
     gross_transition_max = 0.0
@@ -1349,6 +1401,12 @@ def _simulate_portfolio(
 
         ts_key = _ts_key(timestamps[idx])
         regime_label = regime_by_ts.get(ts_key, "range|low_vol") if regime_by_ts else "all"
+        extreme_active_this_bar = bool(extreme_no_trade and extreme_by_ts.get(ts_key, False))
+        if extreme_active_this_bar:
+            extreme_no_trade_bars_count += 1
+        extreme_scale = 1.0
+        if extreme_active_this_bar and extreme_regime_mode == "delever":
+            extreme_scale = float(extreme_gross_mult)
         regime_scale = 1.0
         if regime_mode == "on_off":
             allowed = allowed_regimes or {"trend|low_vol", "trend|high_vol", "range|low_vol", "range|high_vol"}
@@ -1494,7 +1552,7 @@ def _simulate_portfolio(
         elif prev_effective_scale <= 0.0 and effective_scale > 0.0:
             off_to_on_count += 1
 
-        target_effective_scale = max(effective_scale * dd_gross_mult, 0.0)
+        target_effective_scale = max(effective_scale * dd_gross_mult * extreme_scale, 0.0)
         if transition_smoother_enabled and post_halt_cooldown_left > 0 and trading_halt_left == 0:
             post_steps = max(max(params.phased_entry_steps, 5), 1)
             post_ramp = min(post_halt_reentry_step / max(post_steps, 1), 1.0)
@@ -1736,6 +1794,7 @@ def _simulate_portfolio(
         force_liquidation_rebalance = bool(liquidation_triggered or halt_reduce_only)
         rebalance_applied = (turnover_ratio >= threshold) or bool(force_rebalance) or force_liquidation_rebalance
         rebalance_skipped_due_to_shock = False
+        rebalance_skipped_due_to_extreme = False
         if force_rebalance and turnover_ratio < threshold:
             drift_force_count += 1
         dd_rebalance_effective = dd_rebalance_mult
@@ -1751,20 +1810,32 @@ def _simulate_portfolio(
         else:
             dd_rebalance_counter = 0
         safety_rebalance = bool(force_liquidation_rebalance or dd_reduce_only or halt_reduce_only)
-        if (
-            shock_freeze_rebalance
-            and shock_active_this_bar
+        freeze_by_shock = bool(shock_freeze_rebalance and shock_active_this_bar and rebalance_applied and not safety_rebalance)
+        freeze_by_extreme = bool(
+            extreme_no_trade
+            and extreme_regime_mode == "skip"
+            and extreme_active_this_bar
             and rebalance_applied
             and not safety_rebalance
-        ):
-            rebalance_applied = False
-            target_weights = current_weights.copy()
+        )
+        if freeze_by_shock:
             rebalance_skipped_due_to_shock = True
             rebalance_skipped_due_to_shock_count += 1
+        if freeze_by_extreme:
+            rebalance_skipped_due_to_extreme = True
+            rebalance_skipped_due_to_extreme_count += 1
+        if rebalance_skipped_due_to_shock or rebalance_skipped_due_to_extreme:
+            rebalance_applied = False
+            target_weights = current_weights.copy()
+            rebalance_skipped_due_to_final_count += 1
         if not rebalance_applied:
             target_weights = current_weights.copy()
             if rebalance_skipped_due_to_shock:
                 skip_reasons["shock_rebalance_freeze"] = int(skip_reasons.get("shock_rebalance_freeze", 0)) + 1
+            if rebalance_skipped_due_to_extreme:
+                skip_reasons["extreme_regime_no_trade"] = int(skip_reasons.get("extreme_regime_no_trade", 0)) + 1
+            if rebalance_skipped_due_to_shock or rebalance_skipped_due_to_extreme:
+                pass
             elif enable_liquidation and trading_halt_left > 0:
                 skip_reasons["trading_halt"] = int(skip_reasons.get("trading_halt", 0)) + 1
             else:
@@ -2149,6 +2220,7 @@ def _simulate_portfolio(
                 "trades_this_bar": trades_this_bar,
                 "regime_scale": effective_scale,
                 "rebalance_skipped_due_to_shock": bool(rebalance_skipped_due_to_shock),
+                "rebalance_skipped_due_to_extreme": bool(rebalance_skipped_due_to_extreme),
             }
         )
         cost_rows.append(
@@ -2294,6 +2366,12 @@ def _simulate_portfolio(
         "liquidation_count": float(len(liquidation_df)),
         "rebalance_skipped_due_to_shock_count": float(rebalance_skipped_due_to_shock_count),
         "rebalance_skipped_due_to_shock_ratio": float(rebalance_skipped_due_to_shock_count / max(rebalance_attempts, 1)),
+        "rebalance_skipped_due_to_extreme_count": float(rebalance_skipped_due_to_extreme_count),
+        "rebalance_skipped_due_to_extreme_ratio": float(rebalance_skipped_due_to_extreme_count / max(rebalance_attempts, 1)),
+        "rebalance_skipped_due_to_final_count": float(rebalance_skipped_due_to_final_count),
+        "rebalance_skipped_due_to_final_ratio": float(rebalance_skipped_due_to_final_count / max(rebalance_attempts, 1)),
+        "extreme_no_trade_bars_count": float(extreme_no_trade_bars_count),
+        "extreme_no_trade_ratio": float(extreme_no_trade_bars_count / max(rebalance_attempts, 1)),
         "shock_active_bars_count": float(shock_active_bars_count),
     }
     regime_off_ratio = {
@@ -2354,6 +2432,7 @@ def _simulate_portfolio(
         "shock_weight_mult_gap": float(shock_weight_mult_gap),
         "shock_freeze_rebalance": bool(shock_freeze_rebalance),
         "shock_freeze_min_fraction": float(shock_freeze_min_fraction),
+        "extreme_no_trade": bool(extreme_no_trade),
         "lookback_score_mode": str(lookback_score_mode),
         "count_cap_hits": int(cap_hit_count),
         "avg_executed_fraction": float(executed_fraction_sum / max(executed_fraction_count, 1)),
@@ -2417,6 +2496,12 @@ def _simulate_portfolio(
         "shock_active_bars_count": int(shock_active_bars_count),
         "rebalance_skipped_due_to_shock_count": int(rebalance_skipped_due_to_shock_count),
         "rebalance_skipped_due_to_shock_ratio": float(rebalance_skipped_due_to_shock_count / max(rebalance_attempts, 1)),
+        "extreme_no_trade_bars_count": int(extreme_no_trade_bars_count),
+        "extreme_no_trade_ratio": float(extreme_no_trade_bars_count / max(rebalance_attempts, 1)),
+        "rebalance_skipped_due_to_extreme_count": int(rebalance_skipped_due_to_extreme_count),
+        "rebalance_skipped_due_to_extreme_ratio": float(rebalance_skipped_due_to_extreme_count / max(rebalance_attempts, 1)),
+        "rebalance_skipped_due_to_final_count": int(rebalance_skipped_due_to_final_count),
+        "rebalance_skipped_due_to_final_ratio": float(rebalance_skipped_due_to_final_count / max(rebalance_attempts, 1)),
         "cap_hit_counts_by_symbol": {k: int(v) for k, v in sorted(cap_hit_counts_by_symbol.items())},
         "top5_shocked_symbols": [
             {"symbol": str(k), "count": int(v)}
@@ -3083,6 +3168,10 @@ def run_portfolio_walk_forward(
     shock_freeze_rebalance: bool | None = None,
     shock_freeze_min_fraction: float = 0.30,
     lookback_score_mode: Literal["single", "median_3"] = "single",
+    extreme_no_trade: bool = False,
+    extreme_by_ts: dict[str, bool] | None = None,
+    extreme_regime_mode: Literal["skip", "delever"] = "skip",
+    extreme_gross_mult: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
     if not param_grid:
         return pd.DataFrame(), pd.DataFrame(), {"oos_positive_ratio": 0.0, "param_stability_score": 0.0}
@@ -3169,6 +3258,10 @@ def run_portfolio_walk_forward(
                     shock_freeze_rebalance=shock_freeze_rebalance,
                     shock_freeze_min_fraction=shock_freeze_min_fraction,
                     lookback_score_mode=lookback_score_mode,
+                    extreme_no_trade=extreme_no_trade,
+                    extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
                 )
             except Exception:
                 continue
@@ -3260,6 +3353,10 @@ def run_portfolio_walk_forward(
                     shock_freeze_rebalance=shock_freeze_rebalance,
                     shock_freeze_min_fraction=shock_freeze_min_fraction,
                     lookback_score_mode=lookback_score_mode,
+                    extreme_no_trade=extreme_no_trade,
+                    extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
                 )
             except Exception:
                 continue
@@ -3392,6 +3489,10 @@ def run_portfolio_cost_stress(
     shock_freeze_rebalance: bool | None = None,
     shock_freeze_min_fraction: float = 0.30,
     lookback_score_mode: Literal["single", "median_3"] = "single",
+    extreme_no_trade: bool = False,
+    extreme_by_ts: dict[str, bool] | None = None,
+    extreme_regime_mode: Literal["skip", "delever"] = "skip",
+    extreme_gross_mult: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     rows: list[dict[str, Any]] = []
     scenario_idx = 0
@@ -3473,9 +3574,13 @@ def run_portfolio_cost_stress(
                         shock_mode=shock_mode,
                         shock_weight_mult_atr=shock_weight_mult_atr,
                         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+                        shock_freeze_rebalance=shock_freeze_rebalance,
+                        shock_freeze_min_fraction=shock_freeze_min_fraction,
+                        lookback_score_mode=lookback_score_mode,
+                        extreme_no_trade=extreme_no_trade,
+                        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
                     )
                     rows.append(
                         {
@@ -3560,6 +3665,10 @@ def run_portfolio_regime_gating(
     shock_freeze_rebalance: bool | None = None,
     shock_freeze_min_fraction: float = 0.30,
     lookback_score_mode: Literal["single", "median_3"] = "single",
+    extreme_no_trade: bool = False,
+    extreme_by_ts: dict[str, bool] | None = None,
+    extreme_regime_mode: Literal["skip", "delever"] = "skip",
+    extreme_gross_mult: float = 0.5,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     regime_names = sorted(set(regime_by_ts.values()))
     scenarios: list[tuple[str, Literal["none", "on_off", "sizing"], set[str], dict[str, float]]] = []
@@ -3647,9 +3756,13 @@ def run_portfolio_regime_gating(
             shock_mode=shock_mode,
             shock_weight_mult_atr=shock_weight_mult_atr,
             shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+            shock_freeze_rebalance=shock_freeze_rebalance,
+            shock_freeze_min_fraction=shock_freeze_min_fraction,
+            lookback_score_mode=lookback_score_mode,
+            extreme_no_trade=extreme_no_trade,
+            extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
         )
         m = sim.metrics
         rows.append(
@@ -3804,6 +3917,18 @@ def _portfolio_report(
     lines.append(
         f"- rebalance_skipped_due_to_shock: `{int(diagnostics.get('rebalance_skipped_due_to_shock_count', 0))}`"
         f" (`{float(diagnostics.get('rebalance_skipped_due_to_shock_ratio', 0.0)):.6f}`)"
+    )
+    lines.append(
+        f"- rebalance_skipped_due_to_extreme: `{int(diagnostics.get('rebalance_skipped_due_to_extreme_count', 0))}`"
+        f" (`{float(diagnostics.get('rebalance_skipped_due_to_extreme_ratio', 0.0)):.6f}`)"
+    )
+    lines.append(
+        f"- rebalance_skipped_due_to_final: `{int(diagnostics.get('rebalance_skipped_due_to_final_count', 0))}`"
+        f" (`{float(diagnostics.get('rebalance_skipped_due_to_final_ratio', 0.0)):.6f}`)"
+    )
+    lines.append(
+        f"- extreme_no_trade_bars: `{int(diagnostics.get('extreme_no_trade_bars_count', 0))}`"
+        f" (`{float(diagnostics.get('extreme_no_trade_ratio', 0.0)):.6f}`)"
     )
     lines.append("")
     lines.append("## Fee Spike Cause (Shock Freeze)")
@@ -4030,6 +4155,11 @@ def run_portfolio_validation(
     shock_freeze_rebalance: bool | None = None,
     shock_freeze_min_fraction: float = 0.30,
     lookback_score_mode: Literal["single", "median_3"] = "single",
+    extreme_no_trade: bool = False,
+    extreme_no_trade_vol_percentile: float = 0.90,
+    extreme_no_trade_non_trend_logic: Literal["or", "and"] = "or",
+    extreme_regime_mode: Literal["skip", "delever"] = "skip",
+    extreme_gross_mult: float = 0.5,
     stop_on_anomaly: bool,
 ) -> PortfolioRunOutput:
     run_id = f"portfolio_{pd.Timestamp.now(tz='UTC').strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
@@ -4043,6 +4173,10 @@ def run_portfolio_validation(
     lookback_score_mode = str(lookback_score_mode).strip().lower()  # type: ignore[assignment]
     if lookback_score_mode not in {"single", "median_3"}:
         lookback_score_mode = "single"  # type: ignore[assignment]
+    extreme_regime_mode = str(extreme_regime_mode).strip().lower()  # type: ignore[assignment]
+    if extreme_regime_mode not in {"skip", "delever"}:
+        extreme_regime_mode = "skip"  # type: ignore[assignment]
+    extreme_gross_mult = min(max(float(extreme_gross_mult), 0.0), 1.0)
 
     candles_by_symbol = load_multi_candles(
         data_source=data_source,
@@ -4068,6 +4202,17 @@ def run_portfolio_validation(
             "close": market.close[:, btc_idx],
             "volume": np.ones(market.bars, dtype=float),
         }
+    )
+    extreme_vol_percentile = min(max(float(extreme_no_trade_vol_percentile), 0.10), 0.99)
+    extreme_by_ts = _build_extreme_no_trade_map(
+        btc_df,
+        trend_ema_span=trend_ema_span,
+        trend_slope_lookback=trend_slope_lookback,
+        trend_slope_threshold=trend_slope_threshold,
+        atr_period=regime_atr_period,
+        vol_lookback=regime_vol_lookback,
+        vol_percentile=extreme_vol_percentile,
+        non_trend_logic=extreme_no_trade_non_trend_logic,
     )
     pct_list = sorted({round(float(x), 4) for x in (high_vol_percentiles or [regime_vol_percentile])})
     regime_maps_by_pct: dict[float, dict[str, str]] = {}
@@ -4183,9 +4328,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
     )
     selected_params = _select_portfolio_params(wf_df=wf_df, fallback=param_grid[0])
     selected_regime_map = _nearest_regime_map(regime_maps_by_pct, selected_params.high_vol_percentile)
@@ -4248,9 +4397,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
         stop_on_anomaly=stop_on_anomaly,
     )
     compare_base_cap = float(base_cap if max_turnover_notional_to_equity is None else max_turnover_notional_to_equity)
@@ -4309,9 +4462,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
         stop_on_anomaly=stop_on_anomaly,
     )
     adaptive_sim = baseline_sim if cap_mode == "adaptive" else _simulate_portfolio(
@@ -4369,9 +4526,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
         stop_on_anomaly=stop_on_anomaly,
     )
     rate_limit_compare_df = pd.DataFrame(
@@ -4445,9 +4606,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
         stop_on_anomaly=stop_on_anomaly,
     )
     off_transition_cause = int((no_smoother_sim.diagnostics.get("negative_equity_cause_counts", {}) or {}).get("negative_equity_due_to_gross_transition", 0))
@@ -4550,9 +4715,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
     )
     regime_df, regime_table_df = run_portfolio_regime_gating(
         market=market,
@@ -4608,9 +4777,13 @@ def run_portfolio_validation(
         shock_mode=shock_mode,
         shock_weight_mult_atr=shock_weight_mult_atr,
         shock_weight_mult_gap=shock_weight_mult_gap,
-                    shock_freeze_rebalance=shock_freeze_rebalance,
-                    shock_freeze_min_fraction=shock_freeze_min_fraction,
-                    lookback_score_mode=lookback_score_mode,
+        shock_freeze_rebalance=shock_freeze_rebalance,
+        shock_freeze_min_fraction=shock_freeze_min_fraction,
+        lookback_score_mode=lookback_score_mode,
+        extreme_no_trade=extreme_no_trade,
+        extreme_by_ts=extreme_by_ts,
+            extreme_regime_mode=extreme_regime_mode,
+            extreme_gross_mult=extreme_gross_mult,
     )
 
     bench_df = _portfolio_btc_benchmark(market=market, initial_equity=float(base_config.initial_equity))
@@ -4687,6 +4860,12 @@ def run_portfolio_validation(
         "fee_cost_per_gross_time": float(baseline_metrics.get("fee_cost_per_gross_time", 0.0)),
         "rebalance_skipped_due_to_shock_count": float(baseline_metrics.get("rebalance_skipped_due_to_shock_count", 0.0)),
         "rebalance_skipped_due_to_shock_ratio": float(baseline_metrics.get("rebalance_skipped_due_to_shock_ratio", 0.0)),
+        "rebalance_skipped_due_to_extreme_count": float(baseline_metrics.get("rebalance_skipped_due_to_extreme_count", 0.0)),
+        "rebalance_skipped_due_to_extreme_ratio": float(baseline_metrics.get("rebalance_skipped_due_to_extreme_ratio", 0.0)),
+        "rebalance_skipped_due_to_final_count": float(baseline_metrics.get("rebalance_skipped_due_to_final_count", 0.0)),
+        "rebalance_skipped_due_to_final_ratio": float(baseline_metrics.get("rebalance_skipped_due_to_final_ratio", 0.0)),
+        "extreme_no_trade_bars_count": float(baseline_metrics.get("extreme_no_trade_bars_count", 0.0)),
+        "extreme_no_trade_ratio": float(baseline_metrics.get("extreme_no_trade_ratio", 0.0)),
         "shock_active_bars_count": float(baseline_metrics.get("shock_active_bars_count", 0.0)),
         "cap_hit_count": float(baseline_metrics.get("cap_hit_count", 0.0)),
         "avg_executed_fraction": float(baseline_metrics.get("avg_executed_fraction", 0.0)),
@@ -4729,6 +4908,7 @@ def run_portfolio_validation(
         "end": str(_to_utc_timestamp(end)),
         "seed": seed,
         "data_source": data_source,
+        "testnet": bool(testnet),
         "generated_at": pd.Timestamp.now(tz=timezone.utc).isoformat(),
         "selected_params": _portfolio_params_to_dict(selected_params),
         "grid": [_portfolio_params_to_dict(p) for p in param_grid],
@@ -4780,6 +4960,11 @@ def run_portfolio_validation(
             "shock_weight_mult_gap": shock_weight_mult_gap,
             "shock_freeze_rebalance": shock_freeze_rebalance,
             "shock_freeze_min_fraction": shock_freeze_min_fraction,
+            "extreme_no_trade": bool(extreme_no_trade),
+            "extreme_no_trade_vol_percentile": float(extreme_vol_percentile),
+            "extreme_no_trade_non_trend_logic": str(extreme_no_trade_non_trend_logic),
+            "extreme_regime_mode": str(extreme_regime_mode),
+            "extreme_gross_mult": float(extreme_gross_mult),
             "lookback_score_mode": lookback_score_mode,
             "stop_on_anomaly": stop_on_anomaly,
             "regime_turnover_threshold_map": regime_turnover_threshold_map,
@@ -4811,6 +4996,10 @@ def run_portfolio_validation(
             "vol_lookback": regime_vol_lookback,
             "vol_percentile": regime_vol_percentile,
             "high_vol_gross_mult": high_vol_gross_mult,
+            "extreme_no_trade_vol_percentile": float(extreme_vol_percentile),
+            "extreme_no_trade_non_trend_logic": str(extreme_no_trade_non_trend_logic),
+            "extreme_regime_mode": str(extreme_regime_mode),
+            "extreme_gross_mult": float(extreme_gross_mult),
             "high_vol_percentile_candidates": pct_list,
             "gross_map_candidates": gross_maps,
             "selected_regime_size_map": selected_size_map,
@@ -5533,5 +5722,7 @@ __all__ = [
     "_parse_float_list",
     "_parse_int_list",
 ]
+
+
 
 

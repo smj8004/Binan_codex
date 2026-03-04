@@ -1,4 +1,267 @@
-# Experiment Log
+﻿# Experiment Log
+
+## 2026-03-05 - K A/B (4 vs 5)
+
+### Scope
+- changed lever only: `k` (`4` vs `5`)
+- fixed: `lookback_score_mode=median_3(7/14/28)`, `rank_buffer=2`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`, `shock_freeze_min_fraction=0.40`
+- all fixed baseline values unchanged (`testnet=False`, safety stack unchanged)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_150839`
+
+### Run IDs
+- Run A (`k=4`): `portfolio_20260304_150839_ab114d03`
+- Run B (`k=5`): `portfolio_20260304_151111_66ff026a`
+
+### Metrics
+
+| scenario | k | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_turnover_ratio | skipped_ratio | avg_effective_gross | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 4 | 13192.0394 | -0.164491 | 977.3115 | 0.568627 | 0.246750 | 0.015943 | 0.625261 | 0 | 0 |
+| B | 5 | 5293.6255 | -0.145177 | 908.2613 | 0.607843 | 0.347000 | 0.016493 | 0.629590 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `k=5` severely degraded `net_pnl`; keep `k=4`.
+
+### Next Lever (1 only)
+- No additional k lever in this branch; keep `k=4` finalized.
+
+## 2026-03-04 - Extreme Delever Multiplier A/B (0.5 vs 0.7)
+
+### Scope
+- changed lever only: `extreme_gross_mult` (`0.5` vs `0.7`)
+- fixed: `extreme_regime_mode=delever`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_143455`
+
+### Run IDs
+- Run A (`extreme_gross_mult=0.5`): `portfolio_20260304_143455_5128e8ea`
+- Run B (`extreme_gross_mult=0.7`): `portfolio_20260304_143736_badac645`
+
+### Metrics
+
+| scenario | extreme_gross_mult | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_effective_gross | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 0.5 | 13192.0394 | -0.164491 | 977.3115 | 0.568627 | 0.625261 | 0 | 0 |
+| B | 0.7 | 12872.8665 | -0.166731 | 970.8628 | 0.549020 | 0.630713 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `0.7` worsened both `net_pnl` and `max_drawdown` versus `0.5`; finalize `0.5`.
+
+### Next Lever (1 only)
+- No additional lever in this branch; keep `extreme_gross_mult=0.5` as final.
+
+## 2026-03-04 - Extreme Delever Multiplier A/B (0.5 vs 0.3)
+
+### Scope
+- changed lever only: `extreme_gross_mult` (`0.5` vs `0.3`)
+- fixed: `extreme_regime_mode=delever`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_141543`
+
+### Run IDs
+- Run A (`extreme_gross_mult=0.5`): `portfolio_20260304_141543_63c69247`
+- Run B (`extreme_gross_mult=0.3`): `portfolio_20260304_141823_0d36ea8b`
+
+### Metrics
+
+| scenario | extreme_gross_mult | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_effective_gross | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 0.5 | 13192.0394 | -0.164491 | 977.3115 | 0.568627 | 0.625261 | 0 | 0 |
+| B | 0.3 | 13177.5134 | -0.165330 | 977.2980 | 0.568627 | 0.623966 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `0.3` worsened both `net_pnl` and `max_drawdown` versus `0.5`.
+
+### Next Lever (1 only)
+- Change only `extreme_gross_mult` to `0.7` (single parameter).
+
+## 2026-03-04 - Extreme Handling Mode A/B (skip vs delever 0.5)
+
+### Scope
+- changed lever only: `extreme_regime_mode` (`skip` vs `delever`)
+- variant multiplier: `extreme_gross_mult=0.5` (A uses `1.0`)
+- fixed: `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`, `extreme_no_trade=ON`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_140700`
+
+### Run IDs
+- Run A (`extreme_regime_mode=skip`): `portfolio_20260304_140700_bcf0d4f6`
+- Run B (`extreme_regime_mode=delever`, `extreme_gross_mult=0.5`): `portfolio_20260304_140942_b617bf25`
+
+### Metrics
+
+| scenario | extreme_regime_mode | extreme_gross_mult | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | skipped_ratio | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | avg_effective_gross | liquidation_count | eq0_count |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | skip | 1.0 | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.028037 | 0.650371 | 0 | 0 |
+| B | delever | 0.5 | 13192.0394 | -0.164491 | 977.3115 | 0.568627 | 0.015943 | 0.015943 | 0.000000 | 0.028037 | 0.625261 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **SUCCESS**: `delever(0.5)` improved `net_pnl` versus `skip` under the same fixed baseline and hard-gate constraints.
+
+### Next Lever (1 only)
+- Change only `extreme_gross_mult` (`0.5 -> 0.4`) to test whether drawdown can improve without giving back the pnl gain.
+
+## 2026-03-04 - Extreme Trend Slope Threshold A/B (0.0015 vs 0.0020)
+
+### Scope
+- changed lever only: `trend_slope_threshold` (`0.0015` vs `0.0020`)
+- fixed: `extreme_no_trade=ON`, `extreme_non_trend_logic=OR`, `extreme_high_vol_percentile=0.90`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_133826`
+
+### Run IDs
+- Run A (`slope_threshold=0.0015`): `portfolio_20260304_133826_f173501d`
+- Run B (`slope_threshold=0.0020`): `portfolio_20260304_134103_6cf0996a`
+
+### Metrics
+
+| scenario | trend_slope_threshold | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | skipped_ratio | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 0.0015 | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.028037 | 0 | 0 |
+| B | 0.0020 | 11062.4203 | -0.159991 | 903.2465 | 0.529412 | 0.025838 | 0.015943 | 0.009896 | 0.033535 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `0.0020` degraded both `net_pnl` and `max_drawdown` versus `0.0015`.
+
+### Next Lever (1 only)
+- Change only `trend_slope_threshold` to `0.0010` (single parameter).
+
+## 2026-03-04 - Extreme Non-Trend Logic A/B (OR vs AND)
+
+### Scope
+- changed lever only: `extreme_non_trend_logic` (`OR` vs `AND`)
+- both runs fixed as `extreme_no_trade=ON` and `extreme_high_vol_percentile=0.90`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_132642`
+
+### Run IDs
+- Run A (`extreme_no_trade=ON`, `non_trend=OR`): `portfolio_20260304_132642_529581d3`
+- Run B (`extreme_no_trade=ON`, `non_trend=AND`): `portfolio_20260304_132924_9f7f0c8b`
+
+### Metrics
+
+| scenario | non_trend_logic | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | skipped_ratio | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | liquidation_count | eq0_count |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | OR | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.028037 | 0 | 0 |
+| B | AND | 12059.9580 | -0.178526 | 960.1745 | 0.549020 | 0.016493 | 0.015943 | 0.000550 | 0.003848 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `AND` worsened both `net_pnl` and `max_drawdown` versus `OR`.
+
+### Next Lever (1 only)
+- Adjust only `trend_slope_threshold` (single parameter).
+
+## 2026-03-04 - Extreme High-Vol Percentile A/B (0.90 vs 0.95)
+
+### Scope
+- changed lever only: `extreme_high_vol_percentile` (`0.90` vs `0.95`)
+- both runs fixed as `extreme_no_trade=ON`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_130356`
+
+### Run IDs
+- Run A (`extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`): `portfolio_20260304_130356_63f7b670`
+- Run B (`extreme_no_trade=ON`, `extreme_high_vol_percentile=0.95`): `portfolio_20260304_130641_cef0eb38`
+
+### Metrics
+
+| scenario | extreme_high_vol_percentile | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | skipped_ratio | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 0.90 | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.028037 | 0 | 0 |
+| B | 0.95 | 12376.4986 | -0.164910 | 958.4537 | 0.549020 | 0.020341 | 0.015943 | 0.004398 | 0.015393 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `0.95` degraded both `net_pnl` and `max_drawdown` versus `0.90`.
+
+### Next Lever (1 only)
+- Change only `extreme_high_vol_percentile`: `0.95 -> 0.97` (no other parameter changes).
+
+## 2026-03-04 - Extreme High-Vol Percentile A/B (single lever)
+
+### Scope
+- changed lever only: `extreme_high_vol_percentile` (`0.90` vs `0.92`)
+- both runs fixed as `extreme_no_trade=ON`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_freeze_min_fraction=0.40`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_124422`
+
+### Run IDs
+- Run A (`extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`): `portfolio_20260304_124422_248f23b3`
+- Run B (`extreme_no_trade=ON`, `extreme_high_vol_percentile=0.92`): `portfolio_20260304_124705_81f7ee12`
+
+### Metrics
+
+| scenario | extreme_high_vol_percentile | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | skipped_ratio | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 0.90 | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.028037 | 0 | 0 |
+| B | 0.92 | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.026938 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe but `0.92` did not improve `net_pnl` and did not improve `max_drawdown` versus `0.90`.
+
+### Next Lever (1 only)
+- Change only `extreme_high_vol_percentile`: `0.92 -> 0.95` (no other parameter changes).
+
+## 2026-03-04 - Extreme Regime No-Trade A/B (single lever)
+
+### Scope
+- changed lever only: `extreme_no_trade` (`OFF` vs `ON`)
+- fixed rule: `extreme := (BTC ATR vol_percentile >= 0.90) AND ((ADX < 20) OR (abs(trend_slope) < slope_threshold))`
+- all other parameters fixed to baseline (`k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, safety stack unchanged)
+- data source guard: `binance` mainnet historical (`testnet=False`)
+- sweep artifact dir: `out/experiments/extreme_no_trade_ab_20260304_121156`
+
+### Run IDs
+- Run A baseline (`extreme_no_trade=OFF`): `portfolio_20260304_121156_f795836a`
+- Run B variant (`extreme_no_trade=ON`): `portfolio_20260304_121451_f7bd5016`
+
+### Metrics
+
+| scenario | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | skipped_ratio | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A (OFF) | 11993.9845 | -0.180977 | 960.3784 | 0.549020 | 0.015943 | 0.015943 | 0.000000 | 0.000000 | 0 | 0 |
+| B (ON) | 12414.3370 | -0.159377 | 957.4116 | 0.549020 | 0.023090 | 0.015943 | 0.007147 | 0.028037 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **SUCCESS**: `extreme_no_trade=ON` improved `net_pnl` and improved drawdown while preserving hard-gate safety.
+
+### Next Lever (1 only)
+- Tune one parameter only: `extreme high-vol percentile` from `0.90` to `0.92` (keep all other parameters fixed).
 
 ## 2026-03-03 - Rank Buffer Sweep (k fixed at 4, median_3 fixed)
 
@@ -29,3 +292,4 @@
 
 ### Next Lever (1 only)
 - Introduce `Extreme regime no-trade` gating as the next single-lever improvement.
+
