@@ -1,5 +1,65 @@
 ﻿# Experiment Log
 
+## 2026-03-05 - Shock Cooldown Bars A/B (72 vs 48)
+
+### Scope
+- changed lever only: `shock_cooldown_bars` (`72` vs `48`)
+- A: `shock_cooldown_bars=72` (current baseline)
+- B: `shock_cooldown_bars=48`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`, cost model unchanged)
+- sweep artifact dir: `out/experiments/shock_cooldown_ab_20260305_125434`
+
+### Run IDs
+- Run A (`shock_cooldown_bars=72`): `portfolio_20260305_125434_fc8457eb`
+- Run B (`shock_cooldown_bars=48`): `portfolio_20260305_125714_fe235d26`
+
+### Metrics
+
+| scenario | shock_cooldown_bars | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_turnover_ratio | skipped_ratio | avg_effective_gross | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 72 | 13192.0394 | -0.164491 | 977.3115 | 0.568627 | 0.246750 | 0.015943 | 0.625261 | 0.015943 | 0.000000 | 0.028037 | 0 | 0 |
+| B | 48 | 13274.7198 | -0.157939 | 972.7150 | 0.588235 | 0.244846 | 0.009896 | 0.625261 | 0.009896 | 0.000000 | 0.028037 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **SUCCESS**: both passed hard gate, and within 5% `net_pnl` band `B(48)` had less severe `max_drawdown` (and lower fee), so `shock_cooldown_bars=48` wins.
+
+### Next Lever (1 only)
+- Change only `shock_weight_mult_atr` from `0.25` to `0.20`, keep all other fixed values unchanged.
+
+## 2026-03-05 - Lookback Score Mode A/B (median_3 vs single 28d)
+
+### Scope
+- changed lever only: `lookback_score_mode` (`median_3` vs `single`)
+- A: `lookback_score_mode=median_3` with `lookback_bars=168` (7d/14d/28d median)
+- B: `lookback_score_mode=single` with `lookback_bars=672` (28d)
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, extreme definition/handling unchanged, `shock_freeze_min_fraction=0.40`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`)
+- sweep artifact dir: `out/experiments/lookback_mode_ab_20260305_121903`
+
+### Run IDs
+- Run A (`median_3`): `portfolio_20260305_121903_ed15ddf0`
+- Run B (`single`, `lookback_bars=672`): `portfolio_20260305_122146_1824740e`
+
+### Metrics
+
+| scenario | lookback_score_mode | lookback_bars | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_turnover_ratio | skipped_ratio | avg_effective_gross | liquidation_count | eq0_count |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | median_3 | 168 | 13192.0394 | -0.164491 | 977.3115 | 0.568627 | 0.246750 | 0.015943 | 0.625261 | 0 | 0 |
+| B | single | 672 | 6477.7464 | -0.199684 | 584.6865 | 0.549020 | 0.193439 | 0.016685 | 0.623828 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **FAIL**: hard gate is safe, but `single(28d)` materially degraded both `net_pnl` and `max_drawdown`; keep `median_3`.
+
+### Next Lever (1 only)
+- Change only median base lookback (`lookback_bars` for `median_3`) from `168` to `192` (8d/16d/32d), keep all other fixed values.
+
 ## 2026-03-05 - K A/B (4 vs 5)
 
 ### Scope
