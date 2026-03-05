@@ -1,5 +1,35 @@
 ﻿# Experiment Log
 
+## 2026-03-05 - Shock Cooldown A/B (48 vs 36)
+
+### Scope
+- changed lever only: `shock_cooldown_bars` (`48` vs `36`)
+- A: `shock_cooldown_bars=48` (baseline)
+- B: `shock_cooldown_bars=36`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `shock_weight_mult_gap=0.15`, `shock_weight_mult_atr=0.30`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`, cost model unchanged)
+- sweep artifact dir: `out/experiments/shock_cooldown_48_vs_36_ab_20260305_142036`
+
+### Run IDs
+- Run A (`shock_cooldown_bars=48`): `portfolio_20260305_142036_128bd130`
+- Run B (`shock_cooldown_bars=36`): `portfolio_20260305_142310_6028f6fb`
+
+### Metrics
+
+| scenario | shock_cooldown_bars | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_turnover_ratio | skipped_ratio | avg_effective_gross | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | atr_shock_count | gap_shock_count | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 48 | 13880.3947 | -0.156128 | 989.4938 | 0.588235 | 0.243189 | 0.007147 | 0.625261 | 0.007147 | 0.000000 | 0.028037 | 218 | 7 | 0 | 0 |
+| B | 36 | 13880.3947 | -0.156128 | 989.4938 | 0.588235 | 0.243189 | 0.007147 | 0.625261 | 0.007147 | 0.000000 | 0.028037 | 218 | 7 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **TIE**: all decision metrics are equal, so keep baseline `shock_cooldown_bars=48`.
+
+### Next Lever (1 only)
+- Change only `extreme_gross_mult` from `0.5` to `0.4`, keep all other fixed values unchanged.
+
 ## 2026-03-05 - Shock Weight Mult ATR A/B (0.25 vs 0.30)
 
 ### Scope

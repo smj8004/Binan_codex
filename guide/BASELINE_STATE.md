@@ -2,8 +2,8 @@
 
 ## Last Updated
 - date: 2026-03-05
-- experiment: shock weight mult ATR A/B (`0.25` vs `0.30`) with all other fixed values unchanged
-- comparison file: `out/experiments/shock_weight_mult_atr_ab_20260305_140503/baseline_vs_variant.csv`
+- experiment: shock cooldown bars A/B (`48` vs `36`) with all other fixed values unchanged
+- comparison file: `out/experiments/shock_cooldown_48_vs_36_ab_20260305_142036/baseline_vs_variant.csv`
 
 ## Fixed Configuration (Do Not Change)
 - period: `2021-01-01` to `2026-01-01`
@@ -23,8 +23,8 @@
 - cost model: unchanged (same baseline fee/slippage/latency/order settings)
 
 ## Lever Under Test
-- lever name: `shock_weight_mult_atr` (ATR shock downweight multiplier only)
-- tested candidates: `A=0.25`, `B=0.30` (fixed: `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `shock_weight_mult_gap=0.15`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`)
+- lever name: `shock_cooldown_bars` (shock freeze cooldown bars only)
+- tested candidates: `A=48`, `B=36` (fixed: `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `shock_weight_mult_gap=0.15`, `shock_weight_mult_atr=0.30`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`)
 - implementation location: `trader/experiments/runner.py` (`_build_extreme_no_trade_map`, `_simulate_portfolio`)
 
 ## Current Recommendation
@@ -36,7 +36,7 @@
 - recommended atr_shock_threshold: `2.7` (update from 2.5)
 - recommended gap_shock_threshold: `0.12` (update from 0.10)
 - recommended shock_weight_mult_gap: `0.15` (keep)
-- recommended shock_weight_mult_atr: `0.30` (candidate winner; fixed config section remains unchanged)
+- recommended shock_weight_mult_atr: `0.30` (keep)
 - recommended extreme_no_trade: `ON` (unchanged)
 - recommended extreme_high_vol_percentile: `0.90` (keep)
 - recommended extreme_non_trend_logic: `OR` (keep)
@@ -44,5 +44,5 @@
 - recommended extreme_regime_mode: `delever` (use `extreme_gross_mult=0.5`)
 - recommended extreme_gross_mult: `0.5` (keep)
 - selected run id (baseline anchor, unchanged): `portfolio_20260303_142053_4c986473`
-- reason (rule-based): both runs passed hard gate, and `net_pnl` was within 5% (`13799.00 -> 13880.39`), so tie-break used MDD where `0.30` was less severe (`-0.156239 -> -0.156128`); therefore `shock_weight_mult_atr=0.30` is selected.
-- selected run id unchanged reason: baseline anchor is kept fixed for reproducibility; this round compares only `shock_weight_mult_atr` while keeping all fixed values unchanged (`data_source=binance`, `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `shock_weight_mult_gap=0.15`, shock/extreme stack fixed).
+- reason (rule-based): both runs passed hard gate, but all decision metrics were identical (`net_pnl=13880.39`, `max_drawdown=-0.156128`, `fee=989.49`), so baseline `shock_cooldown_bars=48` is retained.
+- selected run id unchanged reason: baseline anchor is kept fixed for reproducibility; this round compares only `shock_cooldown_bars` while keeping all fixed values unchanged (`data_source=binance`, `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `shock_weight_mult_gap=0.15`, `shock_weight_mult_atr=0.30`, shock/extreme stack fixed).
