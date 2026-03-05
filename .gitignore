@@ -30,3 +30,13 @@ data/
 
 # Analysis results
 *.log
+
+# pytest / temp artifacts
+_tmp/
+.tmp_pytest/
+.tmp_pytest*/
+.pytest_tmp/
+pytest-cache-files-*/
+.pytest_cache/
+**/.pytest_cache/
+
