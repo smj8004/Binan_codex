@@ -1,5 +1,35 @@
 ﻿# Experiment Log
 
+## 2026-03-05 - Shock Weight Mult Gap A/B (0.10 vs 0.15)
+
+### Scope
+- changed lever only: `shock_weight_mult_gap` (`0.10` vs `0.15`)
+- A: `shock_weight_mult_gap=0.10` (baseline)
+- B: `shock_weight_mult_gap=0.15`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`, cost model unchanged)
+- sweep artifact dir: `out/experiments/shock_weight_mult_gap_ab_20260305_134817`
+
+### Run IDs
+- Run A (`shock_weight_mult_gap=0.10`): `portfolio_20260305_134817_6d96b47a`
+- Run B (`shock_weight_mult_gap=0.15`): `portfolio_20260305_135052_e6302363`
+
+### Metrics
+
+| scenario | shock_weight_mult_gap | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_turnover_ratio | skipped_ratio | avg_effective_gross | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | gap_shock_count | atr_shock_count | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 0.10 | 13778.1178 | -0.156239 | 988.1654 | 0.588235 | 0.243408 | 0.007147 | 0.625261 | 0.007147 | 0.000000 | 0.028037 | 7 | 218 | 0 | 0 |
+| B | 0.15 | 13799.0023 | -0.156239 | 989.0487 | 0.588235 | 0.243403 | 0.007147 | 0.625261 | 0.007147 | 0.000000 | 0.028037 | 7 | 218 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **SUCCESS**: both passed hard gate, and within 5% `net_pnl` band `B(0.15)` had marginally less severe `max_drawdown`, so `shock_weight_mult_gap=0.15` wins.
+
+### Next Lever (1 only)
+- Change only `shock_weight_mult_atr` from `0.25` to `0.20`, keep all other fixed values unchanged.
+
 ## 2026-03-05 - GAP Shock Threshold A/B (0.10 vs 0.12)
 
 ### Scope

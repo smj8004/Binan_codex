@@ -2,8 +2,8 @@
 
 ## Last Updated
 - date: 2026-03-05
-- experiment: GAP shock threshold A/B (`0.10` vs `0.12`) with all other fixed values unchanged
-- comparison file: `out/experiments/gap_shock_threshold_ab_20260305_133424/baseline_vs_variant.csv`
+- experiment: shock weight mult gap A/B (`0.10` vs `0.15`) with all other fixed values unchanged
+- comparison file: `out/experiments/shock_weight_mult_gap_ab_20260305_134817/baseline_vs_variant.csv`
 
 ## Fixed Configuration (Do Not Change)
 - period: `2021-01-01` to `2026-01-01`
@@ -23,8 +23,8 @@
 - cost model: unchanged (same baseline fee/slippage/latency/order settings)
 
 ## Lever Under Test
-- lever name: `gap_shock_threshold` (gap shock trigger threshold only)
-- tested candidates: `A=0.10`, `B=0.12` (fixed: `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`)
+- lever name: `shock_weight_mult_gap` (gap shock downweight multiplier only)
+- tested candidates: `A=0.10`, `B=0.15` (fixed: `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, `extreme_no_trade=ON`, `extreme_high_vol_percentile=0.90`, `extreme_non_trend_logic=OR`, `trend_slope_threshold=0.0015`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`)
 - implementation location: `trader/experiments/runner.py` (`_build_extreme_no_trade_map`, `_simulate_portfolio`)
 
 ## Current Recommendation
@@ -35,6 +35,7 @@
 - recommended shock_cooldown_bars: `48` (update from 72)
 - recommended atr_shock_threshold: `2.7` (update from 2.5)
 - recommended gap_shock_threshold: `0.12` (update from 0.10)
+- recommended shock_weight_mult_gap: `0.15` (candidate winner; fixed config section remains unchanged)
 - recommended extreme_no_trade: `ON` (unchanged)
 - recommended extreme_high_vol_percentile: `0.90` (keep)
 - recommended extreme_non_trend_logic: `OR` (keep)
@@ -42,5 +43,5 @@
 - recommended extreme_regime_mode: `delever` (use `extreme_gross_mult=0.5`)
 - recommended extreme_gross_mult: `0.5` (keep)
 - selected run id (baseline anchor, unchanged): `portfolio_20260303_142053_4c986473`
-- reason (rule-based): both runs passed hard gate, and `net_pnl` was within 5% (`13917.81 -> 13778.12`), so tie-break used MDD where `0.12` was marginally less severe (effectively tied at `-0.156239`); fee also improved (`994.17 -> 988.17`), so `gap_shock_threshold=0.12` is selected.
-- selected run id unchanged reason: baseline anchor is kept fixed for reproducibility; this round compares only `gap_shock_threshold` while keeping all fixed values unchanged (`data_source=binance`, `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, shock/extreme stack fixed).
+- reason (rule-based): both runs passed hard gate, and `net_pnl` was within 5% (`13778.12 -> 13799.00`), so tie-break used MDD where `0.15` was marginally less severe (effectively tied at `-0.156239`); therefore `shock_weight_mult_gap=0.15` is selected.
+- selected run id unchanged reason: baseline anchor is kept fixed for reproducibility; this round compares only `shock_weight_mult_gap` while keeping all fixed values unchanged (`data_source=binance`, `testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_cooldown_bars=48`, `atr_shock_threshold=2.7`, `gap_shock_threshold=0.12`, shock/extreme stack fixed).
