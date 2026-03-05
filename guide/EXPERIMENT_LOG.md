@@ -1,5 +1,35 @@
 ﻿# Experiment Log
 
+## 2026-03-05 - ATR Shock Threshold A/B (2.5 vs 2.7)
+
+### Scope
+- changed lever only: `atr_shock_threshold` (`2.5` vs `2.7`)
+- A: `atr_shock_threshold=2.5` (current baseline)
+- B: `atr_shock_threshold=2.7`
+- all fixed baseline values unchanged (`testnet=False`, `k=4`, `rank_buffer=2`, `lookback_score_mode=median_3`, `shock_mode=downweight`, `shock_freeze_min_fraction=0.40`, `shock_cooldown_bars=48`, `extreme_regime_mode=delever`, `extreme_gross_mult=0.5`, cost model unchanged)
+- sweep artifact dir: `out/experiments/atr_shock_threshold_ab_20260305_131735`
+
+### Run IDs
+- Run A (`atr_shock_threshold=2.5`): `portfolio_20260305_131735_0c7ab5d4`
+- Run B (`atr_shock_threshold=2.7`): `portfolio_20260305_132016_a641bd03`
+
+### Metrics
+
+| scenario | atr_shock_threshold | net_pnl | max_drawdown | fee_cost_total | oos_positive_ratio | avg_turnover_ratio | skipped_ratio | avg_effective_gross | shock_skip_ratio | extreme_skip_ratio | extreme_no_trade_ratio | atr_shock_count | gap_shock_count | liquidation_count | eq0_count |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A | 2.5 | 13274.7198 | -0.157939 | 972.7150 | 0.588235 | 0.244846 | 0.009896 | 0.625261 | 0.009896 | 0.000000 | 0.028037 | 275 | 12 | 0 | 0 |
+| B | 2.7 | 13917.8080 | -0.156239 | 994.1668 | 0.588235 | 0.243492 | 0.007147 | 0.625261 | 0.007147 | 0.000000 | 0.028037 | 218 | 12 | 0 | 0 |
+
+### Hard-Gate Check
+- Run A: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+- Run B: pass (`liquidation_count=0`, `equity_zero_or_negative_count=0`, `fee_cost_total<=2000`)
+
+### Conclusion (1 line)
+- **SUCCESS**: both passed hard gate, and within 5% `net_pnl` band `B(2.7)` had less severe `max_drawdown`, so `atr_shock_threshold=2.7` wins.
+
+### Next Lever (1 only)
+- Change only `shock_weight_mult_atr` from `0.25` to `0.20`, keep all other fixed values unchanged.
+
 ## 2026-03-05 - Shock Cooldown Bars A/B (72 vs 48)
 
 ### Scope
