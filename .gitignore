@@ -32,6 +32,7 @@ data/
 *.log
 
 # pytest / temp artifacts
+out/
 _tmp/
 .tmp_pytest/
 .tmp_pytest*/
@@ -39,4 +40,3 @@ _tmp/
 pytest-cache-files-*/
 .pytest_cache/
 **/.pytest_cache/
-
