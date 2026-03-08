@@ -61,6 +61,13 @@ PROTECTIVE_MISSING_POLICY=halt
 - `testnet`: Binance Futures testnet REST/WS
 - `mainnet`: Binance Futures mainnet REST/WS
 
+API key selection precedence:
+- When `BINANCE_ENV=testnet`:
+  `BINANCE_TESTNET_API_KEY/SECRET` -> fallback `BINANCE_API_KEY/SECRET`
+- When `BINANCE_ENV=mainnet`:
+  `BINANCE_MAINNET_API_KEY/SECRET` -> fallback `BINANCE_API_KEY/SECRET`
+- Recommended: set testnet and mainnet keys separately to avoid `-2015` mix-ups.
+
 ## Backtest
 
 PowerShell/Windows ?섍꼍?먯꽌??媛?곹솚寃??쇱꽑??以꾩씠湲??꾪빐 `uv run --active ...` ?뺥깭瑜?沅뚯옣?⑸땲??

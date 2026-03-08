@@ -327,8 +327,18 @@ class AppConfig(BaseModel):
         else:
             binance_env = "testnet" if _as_bool(str(v("BINANCE_TESTNET")), default=True) else "mainnet"
 
-        key = str(v("BINANCE_API_KEY") or "").strip()
-        secret = str(v("BINANCE_API_SECRET") or "").strip()
+        generic_key = str(v("BINANCE_API_KEY") or "").strip()
+        generic_secret = str(v("BINANCE_API_SECRET") or "").strip()
+        testnet_key = str(v("BINANCE_TESTNET_API_KEY") or "").strip()
+        testnet_secret = str(v("BINANCE_TESTNET_API_SECRET") or "").strip()
+        mainnet_key = str(v("BINANCE_MAINNET_API_KEY") or "").strip()
+        mainnet_secret = str(v("BINANCE_MAINNET_API_SECRET") or "").strip()
+        if binance_env == "testnet":
+            key = testnet_key or generic_key
+            secret = testnet_secret or generic_secret
+        else:
+            key = mainnet_key or generic_key
+            secret = mainnet_secret or generic_secret
         telegram_bot_token = str(v("TELEGRAM_BOT_TOKEN") or "").strip()
         telegram_chat_id = str(v("TELEGRAM_CHAT_ID") or "").strip()
         discord_webhook_url = str(v("DISCORD_WEBHOOK_URL") or "").strip()
