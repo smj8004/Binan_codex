@@ -410,6 +410,64 @@ class RuntimeEngine:
             "fee_pool": self.position_fee_pool,
         }
 
+    def _protective_orders_snapshot(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        broker_open: dict[str, Any] = {}
+        get_open_orders = getattr(self.broker, "get_open_orders", None)
+        if callable(get_open_orders):
+            try:
+                maybe = get_open_orders(symbol=self.config.symbol)
+                if isinstance(maybe, dict):
+                    broker_open = maybe
+            except TypeError:
+                try:
+                    maybe = get_open_orders(self.config.symbol)
+                    if isinstance(maybe, dict):
+                        broker_open = maybe
+                except Exception:
+                    broker_open = {}
+            except Exception:
+                broker_open = {}
+        for oid, meta in self._open_orders.items():
+            if not isinstance(meta, dict):
+                continue
+            req = meta.get("request")
+            if not isinstance(req, OrderRequest):
+                continue
+            broker_meta = broker_open.get(oid)
+            status = str(broker_meta.get("status", "NEW")) if isinstance(broker_meta, dict) else "NEW"
+            rows.append(
+                {
+                    "order_id": oid,
+                    "type": str(meta.get("kind", "unknown")),
+                    "price": req.stop_price,
+                    "reduce_only": bool(req.reduce_only),
+                    "status": status,
+                }
+            )
+        return rows
+
+    def _emit_execution_snapshot(
+        self,
+        *,
+        event: str,
+        bar: LiveBar,
+        price_source: str,
+        fill_price: float | None = None,
+    ) -> None:
+        self._event(
+            "execution_snapshot",
+            {
+                "event": event,
+                "price_source": price_source,
+                "last_price": float(bar.close),
+                "entry_price": float(self.position_entry_price),
+                "position_qty": float(self.position_qty),
+                "fill_price": (float(fill_price) if fill_price is not None else None),
+                "protective_orders": self._protective_orders_snapshot(),
+            },
+        )
+
     def _required_protective_kinds(self) -> set[str]:
         required: set[str] = set()
         if (self.config.sl_mode == "pct" and self.config.protective_stop_loss_pct > 0) or (
@@ -566,6 +624,7 @@ class RuntimeEngine:
                 self.position_entry_price = weighted / abs(new_qty)
             self.position_qty = new_qty
             self.position_fee_pool += fee
+            self._emit_execution_snapshot(event="fill_applied", bar=bar, price_source="order_fill_avg_price", fill_price=price)
             return
 
         close_qty = min(abs(q_before), abs(signed_fill))
@@ -598,12 +657,13 @@ class RuntimeEngine:
             self.position_entry_price = price
             self.position_entry_ts = str(bar.timestamp)
             self.position_fee_pool = fee
+        self._emit_execution_snapshot(event="fill_applied", bar=bar, price_source="order_fill_avg_price", fill_price=price)
 
     def _order_qty(self, price: float) -> float:
         return max(self.config.fixed_notional_usdt / max(price, 1e-9), 0.0)
 
     def _make_client_order_id(self, *, bar: LiveBar, intent: str) -> str:
-        raw = f"{self.run_id}:{int(bar.timestamp.timestamp())}:{intent}"
+        raw = f"{self.run_id}:{self.config.symbol}:{int(bar.timestamp.timestamp())}:{intent}"
         return f"rt-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:24]}"
 
     def _place_order(
@@ -854,6 +914,12 @@ class RuntimeEngine:
                     "qty": qty,
                 },
             )
+            self._emit_execution_snapshot(
+                event="protective_orders_created",
+                bar=bar,
+                price_source="bar_close",
+                fill_price=None,
+            )
 
     def _maybe_update_trailing_stop(self, *, bar: LiveBar) -> None:
         if not self.config.trailing_stop_enabled:
@@ -932,7 +998,13 @@ class RuntimeEngine:
         if not callable(poll):
             return
         try:
-            updates = poll()
+            try:
+                updates = poll(symbol=self.config.symbol)
+            except TypeError:
+                try:
+                    updates = poll(self.config.symbol)
+                except TypeError:
+                    updates = poll()
             if self.config.mode == "live":
                 self._consecutive_api_errors = 0
         except Exception as exc:
@@ -964,6 +1036,12 @@ class RuntimeEngine:
             if sibling_id:
                 self._cancel_open_order(bar=bar, order_id=sibling_id, reason="paired protective filled")
             self._protective_pair = {}
+            self._emit_execution_snapshot(
+                event="protective_order_filled",
+                bar=bar,
+                price_source="trigger_order_fill_avg_price",
+                fill_price=res.avg_price,
+            )
 
     def _new_entry_allowed(self, *, bar: LiveBar) -> tuple[bool, str]:
         dt = pd.to_datetime(bar.timestamp, utc=True).to_pydatetime()

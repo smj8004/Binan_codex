@@ -358,10 +358,20 @@ class PaperBroker(Broker):
             client_order_id=adjusted_req.client_order_id,
         )
 
-    def poll_filled_orders(self) -> list[tuple[OrderRequest, OrderResult]]:
-        out = list(self._trigger_fill_events)
-        self._trigger_fill_events.clear()
-        return out
+    def poll_filled_orders(self, symbol: str | None = None) -> list[tuple[OrderRequest, OrderResult]]:
+        if symbol is None:
+            out = list(self._trigger_fill_events)
+            self._trigger_fill_events.clear()
+            return out
+        matched: list[tuple[OrderRequest, OrderResult]] = []
+        remaining: list[tuple[OrderRequest, OrderResult]] = []
+        for req, res in self._trigger_fill_events:
+            if str(req.symbol) == str(symbol):
+                matched.append((req, res))
+            else:
+                remaining.append((req, res))
+        self._trigger_fill_events = remaining
+        return matched
 
     def cancel_order(self, order_id: str, *, symbol: str | None = None) -> bool:
         req = self._pending_trigger_orders.pop(order_id, None)
