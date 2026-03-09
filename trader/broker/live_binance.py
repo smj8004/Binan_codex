@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import time
+from decimal import Decimal
+from decimal import ROUND_DOWN
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
@@ -55,6 +57,7 @@ class LiveBinanceBroker(Broker):
             )
             if testnet:
                 self._configure_futures_testnet_urls(self.exchange)
+        self._configure_futures_exchange_options(self.exchange)
         self.live_trading = live_trading
         self.max_retries = max_retries
         self.retry_delay_sec = retry_delay_sec
@@ -65,6 +68,7 @@ class LiveBinanceBroker(Broker):
         self._open_orders: dict[str, dict[str, Any]] = {}
         self._orders_by_id: dict[str, dict[str, Any]] = {}
         self._positions: dict[str, dict[str, float]] = {}
+        self._symbol_filters_cache: dict[str, dict[str, float | None]] = {}
         self._seen_fill_keys: set[str] = set()
         self._last_user_stream_update: float | None = None
         self._storage: Any | None = None
@@ -82,6 +86,15 @@ class LiveBinanceBroker(Broker):
             )
         if self.use_user_stream and self._user_stream is not None:
             self._user_stream.start(self.handle_user_stream_event)
+
+    def _configure_futures_exchange_options(self, exchange: Any) -> None:
+        options = getattr(exchange, "options", None)
+        if not isinstance(options, dict):
+            return
+        options["defaultType"] = "future"
+        options.setdefault("defaultSubType", "linear")
+        # Avoid spot SAPI currency metadata calls that reject futures-testnet API keys.
+        options["fetchCurrencies"] = False
 
     def _configure_futures_testnet_urls(self, exchange: Any) -> None:
         base = "https://testnet.binancefuture.com"
@@ -113,8 +126,11 @@ class LiveBinanceBroker(Broker):
         return "wss://fstream.binance.com/ws"
 
     def _last_request_url(self) -> str | None:
+        exchange = getattr(self, "exchange", None)
+        if exchange is None:
+            return None
         for attr in ("last_request_url", "lastRequestUrl"):
-            value = getattr(self.exchange, attr, None)
+            value = getattr(exchange, attr, None)
             if isinstance(value, str) and value:
                 return value
         return None
@@ -200,6 +216,7 @@ class LiveBinanceBroker(Broker):
         filters = market.get("info", {}).get("filters", []) if isinstance(market.get("info"), dict) else []
         tick_size = None
         step_size = None
+        min_qty = None
         min_notional = None
         if isinstance(filters, list):
             for filt in filters:
@@ -210,9 +227,15 @@ class LiveBinanceBroker(Broker):
                     tick_size = self._as_float(filt.get("tickSize"))
                 elif ftype == "LOT_SIZE":
                     step_size = self._as_float(filt.get("stepSize"))
+                    min_qty = self._as_float(filt.get("minQty"))
                 elif ftype in {"MIN_NOTIONAL", "NOTIONAL"}:
                     min_notional = self._as_float(filt.get("notional", filt.get("minNotional")))
-        return {"tick_size": tick_size, "step_size": step_size, "min_notional": min_notional}
+        return {
+            "tick_size": tick_size,
+            "step_size": step_size,
+            "min_qty": min_qty,
+            "min_notional": min_notional,
+        }
 
     def _symbol_filter_snapshot_from_exchange_info(self, exchange_info: dict[str, Any], symbol: str) -> dict[str, float | None]:
         rows = exchange_info.get("symbols")
@@ -289,6 +312,32 @@ class LiveBinanceBroker(Broker):
                 "error": str(exc),
             }
 
+    def _fetch_futures_balance_rows(self) -> list[dict[str, Any]] | None:
+        method_names = (
+            "fapiPrivateV2GetBalance",
+            "fapiPrivateGetBalance",
+            "fapiPrivateV3GetBalance",
+            "fapiprivatev2GetBalance",
+            "fapiprivateGetBalance",
+            "fapiprivatev3GetBalance",
+        )
+        for method_name in method_names:
+            method = getattr(self.exchange, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                rows = method()
+            except Exception:
+                continue
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+            if isinstance(rows, dict):
+                assets = rows.get("assets")
+                if isinstance(assets, list):
+                    return [row for row in assets if isinstance(row, dict)]
+                return [rows]
+        return None
+
     def _fetch_exchange_info_public(self) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         method_names = (
             "fapiPublicGetExchangeInfo",
@@ -355,7 +404,13 @@ class LiveBinanceBroker(Broker):
     def _fetch_position_risk(self, symbol: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         market_symbol = self._market_symbol_key(symbol)
         last_error: dict[str, Any] | None = None
-        for method_name in ("fapiPrivateGetPositionRisk", "fapiPrivate_get_positionrisk"):
+        for method_name in (
+            "fapiPrivateV2GetPositionRisk",
+            "fapiPrivateGetPositionRisk",
+            "fapiPrivateV3GetPositionRisk",
+            "fapiPrivateV2_get_positionrisk",
+            "fapiPrivate_get_positionrisk",
+        ):
             method = getattr(self.exchange, method_name, None)
             if not callable(method):
                 continue
@@ -638,7 +693,8 @@ class LiveBinanceBroker(Broker):
             else:
                 filters = self._symbol_filter_snapshot_from_exchange_info(exchange_info, symbol)
             market_detail = (
-                f"tick_size={filters['tick_size']} step_size={filters['step_size']} min_notional={filters['min_notional']}"
+                f"tick_size={filters['tick_size']} step_size={filters['step_size']} "
+                f"min_qty={filters.get('min_qty')} min_notional={filters['min_notional']}"
             )
         except Exception as exc:
             market_ok = False
@@ -742,25 +798,119 @@ class LiveBinanceBroker(Broker):
         while True:
             attempt += 1
             try:
+                direct = self._create_order_via_futures_private_api(
+                    symbol=symbol,
+                    order_type=order_type,
+                    side=side,
+                    amount=amount,
+                    price=price,
+                    params=params,
+                )
+                if isinstance(direct, dict):
+                    return direct
+                exchange_params = {"type": "future", **params}
                 return self.exchange.create_order(
                     symbol=symbol,
                     type=order_type,
                     side=side.lower(),
                     amount=amount,
                     price=price,
-                    params=params,
+                    params=exchange_params,
                 )
             except (ccxt.NetworkError, ccxt.RequestTimeout) as exc:
                 if attempt >= self.max_retries:
                     raise RuntimeError(f"create_order failed after retries: {exc}") from exc
                 time.sleep(self.retry_delay_sec)
+            except Exception as exc:
+                endpoint = self._last_request_url() or "create_order"
+                raise RuntimeError(f"create_order failed: {exc} (endpoint={endpoint})") from exc
+
+    def _create_order_via_futures_private_api(
+        self,
+        *,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: float,
+        price: float | None,
+        params: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        futures_type = str(order_type).upper()
+        use_algo_endpoint = futures_type in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}
+        if use_algo_endpoint:
+            method_names = ("fapiPrivatePostAlgoOrder", "fapiprivatePostAlgoOrder")
+        else:
+            method_names = ("fapiPrivatePostOrder", "fapiprivatePostOrder")
+        method = None
+        for name in method_names:
+            candidate = getattr(self.exchange, name, None)
+            if callable(candidate):
+                method = candidate
+                break
+        if method is None:
+            return None
+
+        if futures_type == "MARKET":
+            futures_type = "MARKET"
+        elif futures_type == "LIMIT":
+            futures_type = "LIMIT"
+        elif futures_type == "STOP_MARKET":
+            futures_type = "STOP_MARKET"
+        elif futures_type == "TAKE_PROFIT_MARKET":
+            futures_type = "TAKE_PROFIT_MARKET"
+
+        payload: dict[str, Any] = {
+            "symbol": self._market_symbol_key(symbol),
+            "side": self._normalize_side(side),
+            "type": futures_type,
+            "quantity": amount,
+        }
+        if use_algo_endpoint:
+            payload["algoType"] = "CONDITIONAL"
+            payload["algotype"] = "CONDITIONAL"
+        if price is not None:
+            payload["price"] = price
+        if params.get("timeInForce") is not None:
+            payload["timeInForce"] = params["timeInForce"]
+        if params.get("stopPrice") is not None:
+            if use_algo_endpoint:
+                payload["triggerPrice"] = params["stopPrice"]
+            else:
+                payload["stopPrice"] = params["stopPrice"]
+        if params.get("positionSide") is not None:
+            payload["positionSide"] = params["positionSide"]
+        if params.get("reduceOnly"):
+            payload["reduceOnly"] = True
+        if params.get("newClientOrderId") is not None:
+            payload["newClientOrderId"] = params["newClientOrderId"]
+            if use_algo_endpoint:
+                payload["clientAlgoId"] = params["newClientOrderId"]
+
+        raw = method(payload)
+        if not isinstance(raw, dict):
+            return None
+        raw_status = raw.get("status")
+        if raw_status is None:
+            raw_status = "NEW" if bool(raw.get("success", True)) else "REJECTED"
+        return {
+            "id": str(raw.get("orderId", raw.get("algoId", raw.get("id", "unknown")))),
+            "status": str(raw_status),
+            "filled": self._as_float(raw.get("executedQty", raw.get("filled", 0.0))),
+            "average": self._as_float(raw.get("avgPrice", raw.get("average", 0.0))),
+            "price": self._as_float(raw.get("price", 0.0)),
+            "fee": {"cost": 0.0},
+            "info": raw,
+        }
 
     def _retry_fetch_order(self, *, order_id: str, symbol: str) -> dict[str, Any] | None:
         attempt = 0
         while True:
             attempt += 1
             try:
-                fetched = self.exchange.fetch_order(order_id, symbol=symbol)
+                direct = self._fetch_order_via_futures_private_api(order_id=order_id, symbol=symbol)
+                if isinstance(direct, dict):
+                    return direct
+                fetched = self.exchange.fetch_order(order_id, symbol=symbol, params={"type": "future"})
                 return fetched if isinstance(fetched, dict) else None
             except (ccxt.NetworkError, ccxt.RequestTimeout):
                 if attempt >= self.max_retries:
@@ -768,6 +918,31 @@ class LiveBinanceBroker(Broker):
                 time.sleep(self.retry_delay_sec)
             except Exception:
                 return None
+
+    def _fetch_order_via_futures_private_api(self, *, order_id: str, symbol: str) -> dict[str, Any] | None:
+        method_names = ("fapiPrivateGetOrder", "fapiprivateGetOrder")
+        method = None
+        for name in method_names:
+            candidate = getattr(self.exchange, name, None)
+            if callable(candidate):
+                method = candidate
+                break
+        if method is None:
+            return None
+        payload = {"symbol": self._market_symbol_key(symbol), "orderId": order_id}
+        raw = method(payload)
+        if not isinstance(raw, dict):
+            return None
+        fee = self._as_float(raw.get("commission", 0.0))
+        return {
+            "id": str(raw.get("orderId", order_id)),
+            "status": str(raw.get("status", "NEW")),
+            "filled": self._as_float(raw.get("executedQty", 0.0)),
+            "average": self._as_float(raw.get("avgPrice", 0.0)),
+            "price": self._as_float(raw.get("price", 0.0)),
+            "fee": {"cost": fee},
+            "info": raw,
+        }
 
     def _retry_fetch_ticker_price(self, symbol: str) -> float | None:
         attempt = 0
@@ -806,12 +981,134 @@ class LiveBinanceBroker(Broker):
             except Exception:
                 return []
 
+    def _retry_fetch_balance_payload(self) -> dict[str, Any]:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                try:
+                    payload = self.exchange.fetch_balance(params={"type": "future"})
+                except TypeError:
+                    payload = self.exchange.fetch_balance()
+                if isinstance(payload, dict) and payload:
+                    return payload
+                direct_rows = self._fetch_futures_balance_rows()
+                if direct_rows is not None:
+                    return {"info": direct_rows, "source": "fapi_private_balance"}
+                return payload if isinstance(payload, dict) else {}
+            except (ccxt.NetworkError, ccxt.RequestTimeout):
+                direct_rows = self._fetch_futures_balance_rows()
+                if direct_rows is not None:
+                    return {"info": direct_rows, "source": "fapi_private_balance"}
+                if attempt >= self.max_retries:
+                    return {}
+                time.sleep(self.retry_delay_sec)
+            except Exception:
+                direct_rows = self._fetch_futures_balance_rows()
+                if direct_rows is not None:
+                    return {"info": direct_rows, "source": "fapi_private_balance"}
+                return {}
+
+    def _parse_futures_balance_snapshot(self, payload: dict[str, Any], *, quote_asset: str) -> dict[str, Any]:
+        quote = str(quote_asset).upper()
+
+        def _row_snapshot(row: dict[str, Any], *, source: str) -> dict[str, Any]:
+            available = self._as_float(
+                row.get("availableBalance", row.get("withdrawAvailable", row.get("maxWithdrawAmount", 0.0)))
+            )
+            total = self._as_float(
+                row.get(
+                    "balance",
+                    row.get("walletBalance", row.get("marginBalance", row.get("totalWalletBalance", 0.0))),
+                )
+            )
+            endpoint_used = self._last_request_url() or "/fapi/v2/balance"
+            return {
+                "asset": quote,
+                "available_balance": max(available, 0.0),
+                "total_balance": max(total, 0.0),
+                "account_available_usdt": max(available, 0.0),
+                "account_total_usdt": max(total, 0.0),
+                "source": source,
+                "endpoint_used": endpoint_used,
+            }
+
+        info = payload.get("info")
+        if isinstance(info, list):
+            for row in info:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("asset", "")).upper() != quote:
+                    continue
+                return _row_snapshot(row, source="fetch_balance.info")
+        elif isinstance(info, dict):
+            assets = info.get("assets")
+            if isinstance(assets, list):
+                for row in assets:
+                    if not isinstance(row, dict):
+                        continue
+                    if str(row.get("asset", "")).upper() != quote:
+                        continue
+                    return _row_snapshot(row, source="fetch_balance.info.assets")
+            if str(info.get("asset", "")).upper() == quote:
+                return _row_snapshot(info, source="fetch_balance.info.dict")
+            available = self._as_float(info.get("availableBalance", info.get("maxWithdrawAmount", 0.0)))
+            total = self._as_float(info.get("totalWalletBalance", info.get("walletBalance", info.get("balance", 0.0))))
+            if available > 0.0 or total > 0.0:
+                endpoint_used = self._last_request_url() or "/fapi/v2/balance"
+                return {
+                    "asset": quote,
+                    "available_balance": max(available, 0.0),
+                    "total_balance": max(total, 0.0),
+                    "account_available_usdt": max(available, 0.0),
+                    "account_total_usdt": max(total, 0.0),
+                    "source": "fetch_balance.info.account",
+                    "endpoint_used": endpoint_used,
+                }
+
+        quote_map = payload.get(quote)
+        if isinstance(quote_map, dict):
+            available = self._as_float(quote_map.get("free", quote_map.get("available", 0.0)))
+            total = self._as_float(quote_map.get("total", quote_map.get("balance", 0.0)))
+            if available > 0.0 or total > 0.0:
+                endpoint_used = self._last_request_url() or "/fapi/v2/balance"
+                return {
+                    "asset": quote,
+                    "available_balance": max(available, 0.0),
+                    "total_balance": max(total, 0.0),
+                    "account_available_usdt": max(available, 0.0),
+                    "account_total_usdt": max(total, 0.0),
+                    "source": "fetch_balance.quote_map",
+                    "endpoint_used": endpoint_used,
+                }
+
+        free = payload.get("free")
+        total_map = payload.get("total")
+        available = 0.0
+        total = 0.0
+        if isinstance(free, dict):
+            available = self._as_float(free.get(quote, 0.0))
+        if isinstance(total_map, dict):
+            total = self._as_float(total_map.get(quote, 0.0))
+        endpoint_used = self._last_request_url() or "/fapi/v2/balance"
+        return {
+            "asset": quote,
+            "available_balance": max(available, 0.0),
+            "total_balance": max(total, 0.0),
+            "account_available_usdt": max(available, 0.0),
+            "account_total_usdt": max(total, 0.0),
+            "source": "fetch_balance.free_total",
+            "endpoint_used": endpoint_used,
+        }
+
     def _round_price(self, symbol: str, price: float) -> float:
         try:
             if hasattr(self.exchange, "price_to_precision"):
                 return float(self.exchange.price_to_precision(symbol, price))
         except Exception:
-            pass
+            tick = self._symbol_tick_size(symbol)
+            if tick > 0:
+                return self._quantize_down(price, tick)
         return round(price, 8)
 
     def _round_amount(self, symbol: str, amount: float) -> float:
@@ -819,8 +1116,49 @@ class LiveBinanceBroker(Broker):
             if hasattr(self.exchange, "amount_to_precision"):
                 return float(self.exchange.amount_to_precision(symbol, amount))
         except Exception:
-            pass
+            step = self._symbol_step_size(symbol)
+            if step > 0:
+                return self._quantize_down(amount, step)
         return round(amount, 8)
+
+    def _symbol_filters(self, symbol: str) -> dict[str, float | None]:
+        key = self._market_symbol_key(symbol)
+        cached = self._symbol_filters_cache.get(key)
+        if isinstance(cached, dict):
+            return cached
+        exchange_info, _ = self._fetch_exchange_info_public()
+        filters: dict[str, float | None] = {"tick_size": None, "step_size": None, "min_qty": None, "min_notional": None}
+        if isinstance(exchange_info, dict):
+            try:
+                filters = self._symbol_filter_snapshot_from_exchange_info(exchange_info, symbol)
+            except Exception:
+                pass
+        self._symbol_filters_cache[key] = filters
+        return filters
+
+    def _symbol_step_size(self, symbol: str) -> float:
+        filters = self._symbol_filters(symbol)
+        return max(self._as_float(filters.get("step_size", 0.0)), 0.0)
+
+    def _symbol_tick_size(self, symbol: str) -> float:
+        filters = self._symbol_filters(symbol)
+        return max(self._as_float(filters.get("tick_size", 0.0)), 0.0)
+
+    def _symbol_min_qty(self, symbol: str) -> float:
+        filters = self._symbol_filters(symbol)
+        return max(self._as_float(filters.get("min_qty", 0.0)), 0.0)
+
+    def _symbol_min_notional(self, symbol: str) -> float:
+        filters = self._symbol_filters(symbol)
+        return max(self._as_float(filters.get("min_notional", 0.0)), 0.0)
+
+    def _quantize_down(self, value: float, step: float) -> float:
+        if step <= 0:
+            return float(value)
+        d_value = Decimal(str(value))
+        d_step = Decimal(str(step))
+        quantized = (d_value / d_step).to_integral_value(rounding=ROUND_DOWN) * d_step
+        return float(quantized)
 
     def attach_storage(self, *, storage: Any, run_id: str) -> None:
         self._storage = storage
@@ -850,6 +1188,30 @@ class LiveBinanceBroker(Broker):
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    def _apply_local_position_fill(self, *, request: OrderRequest, result: OrderResult) -> None:
+        if str(result.status).upper() != "FILLED":
+            return
+        filled = abs(self._as_float(result.filled_qty))
+        if filled <= 0:
+            return
+        side = self._normalize_side(request.side)
+        delta = filled if side == "BUY" else -filled
+        sym_key = self._market_symbol_key(request.symbol)
+        with self._lock:
+            prev = self._positions.get(sym_key, {})
+            prev_qty = self._as_float(prev.get("qty", 0.0))
+            prev_entry = self._as_float(prev.get("entry_price", 0.0))
+            new_qty = prev_qty + delta
+            if abs(new_qty) < 1e-12:
+                self._positions[sym_key] = {"qty": 0.0, "entry_price": 0.0}
+                return
+            new_entry = self._as_float(result.avg_price)
+            # Preserve/average entry price when scaling in on the same side.
+            if prev_qty != 0 and (prev_qty > 0) == (new_qty > 0) and prev_entry > 0 and new_entry > 0:
+                total = abs(prev_qty) + filled
+                new_entry = (abs(prev_qty) * prev_entry + filled * new_entry) / max(total, 1e-12)
+            self._positions[sym_key] = {"qty": new_qty, "entry_price": max(new_entry, 0.0)}
 
     def _result(
         self,
@@ -1095,6 +1457,37 @@ class LiveBinanceBroker(Broker):
             client_order_id=client_order_id,
         )
 
+    def _wait_for_terminal_rest_status(
+        self, *, order_id: str, symbol: str, client_order_id: str | None
+    ) -> OrderResult | None:
+        deadline = time.monotonic() + self.ws_order_wait_sec
+        last_non_terminal: OrderResult | None = None
+        while time.monotonic() < deadline:
+            fetched = self._retry_fetch_order(order_id=order_id, symbol=symbol)
+            if fetched is None:
+                time.sleep(self.ws_poll_interval_sec)
+                continue
+            raw_status = str(fetched.get("status", "open")).upper()
+            mapped = self._map_status(raw_status)
+            avg_price = self._as_float(fetched.get("average") or fetched.get("price") or 0.0)
+            filled_qty = self._as_float(fetched.get("filled") or 0.0)
+            fee_obj = fetched.get("fee") or {}
+            fee_paid = self._as_float(fee_obj.get("cost") if isinstance(fee_obj, dict) else 0.0)
+            row = self._result(
+                order_id=str(fetched.get("id") or order_id),
+                status=mapped,
+                filled_qty=filled_qty,
+                avg_price=avg_price,
+                fee=fee_paid,
+                message="REST order sync",
+                client_order_id=client_order_id,
+            )
+            if mapped in TERMINAL_STATUSES:
+                return row
+            last_non_terminal = row
+            time.sleep(self.ws_poll_interval_sec)
+        return last_non_terminal
+
     def _position_qty_from_cache_or_rest(self, symbol: str) -> float:
         sym_key = self._market_symbol_key(symbol)
         with self._lock:
@@ -1151,13 +1544,6 @@ class LiveBinanceBroker(Broker):
             )
 
         mark_price = self._retry_fetch_ticker_price(request.symbol)
-        if order_type in {"STOP_MARKET", "TAKE_PROFIT_MARKET"} and mark_price is None:
-            return request, self._result(
-                order_id=f"reject-{int(time.time() * 1000)}",
-                status="REJECTED",
-                message="failed to fetch current price for stop validation",
-                client_order_id=request.client_order_id,
-            )
         if mark_price is not None and stop_price is not None:
             err = self._validate_trigger_price(side=side, order_type=order_type, stop_price=stop_price, mark_price=mark_price)
             if err is not None:
@@ -1196,6 +1582,37 @@ class LiveBinanceBroker(Broker):
         rounded_amount = self._round_amount(request.symbol, amount)
         rounded_price = self._round_price(request.symbol, price) if price is not None else None
         rounded_stop = self._round_price(request.symbol, stop_price) if stop_price is not None else None
+        if rounded_amount <= 0:
+            return request, self._result(
+                order_id=f"reject-{int(time.time() * 1000)}",
+                status="REJECTED",
+                message="amount rounded to zero by symbol step size",
+                client_order_id=request.client_order_id,
+            )
+        if not request.reduce_only:
+            constraints = self.get_symbol_order_constraints(symbol=request.symbol)
+            min_qty = max(float(constraints.get("min_qty", 0.0) or 0.0), 0.0)
+            min_notional = max(float(constraints.get("min_notional", 0.0) or 0.0), 0.0)
+            if min_qty > 0 and rounded_amount + 1e-12 < min_qty:
+                return request, self._result(
+                    order_id=f"reject-{int(time.time() * 1000)}",
+                    status="REJECTED",
+                    message=f"amount below min_qty ({rounded_amount} < {min_qty})",
+                    client_order_id=request.client_order_id,
+                )
+            ref_price = float(mark_price or rounded_price or rounded_stop or 0.0)
+            if ref_price > 0 and min_notional > 0:
+                final_notional = rounded_amount * ref_price
+                if final_notional + 1e-9 < min_notional:
+                    return request, self._result(
+                        order_id=f"reject-{int(time.time() * 1000)}",
+                        status="REJECTED",
+                        message=(
+                            "entry_notional_too_small: "
+                            f"attempted_notional={final_notional:.10f} min_notional={min_notional:.10f}"
+                        ),
+                        client_order_id=request.client_order_id,
+                    )
         prepared = OrderRequest(
             symbol=request.symbol,
             side=side,
@@ -1252,13 +1669,14 @@ class LiveBinanceBroker(Broker):
             price=prepared.price,
             params=params,
         )
+        mapped_status = self._map_status(str(order.get("status", "open")))
         avg_price = self._as_float(order.get("average") or order.get("price") or 0.0)
         filled_qty = self._as_float(order.get("filled") or 0.0)
         fee_obj = order.get("fee") or {}
         fee_paid = self._as_float(fee_obj.get("cost") if isinstance(fee_obj, dict) else 0.0)
         result = self._result(
             order_id=str(order.get("id", "unknown")),
-            status=str(order.get("status", "open")),
+            status=mapped_status,
             filled_qty=filled_qty,
             avg_price=avg_price,
             fee=fee_paid,
@@ -1285,17 +1703,103 @@ class LiveBinanceBroker(Broker):
                     raise RuntimeError(
                         "No terminal order status from user stream and fallback REST check was inconclusive"
                     )
+        elif result.status == "NEW" and self._normalize_order_type(prepared.order_type) in {"MARKET", "LIMIT"}:
+            polled = self._wait_for_terminal_rest_status(
+                order_id=result.order_id,
+                symbol=prepared.symbol,
+                client_order_id=prepared.client_order_id,
+            )
+            if polled is not None:
+                result = polled
 
+        self._apply_local_position_fill(request=prepared, result=result)
         if prepared.client_order_id:
             self._client_results[prepared.client_order_id] = result
         return result
 
     def cancel_order(self, order_id: str, *, symbol: str) -> bool:
         try:
-            self.exchange.cancel_order(order_id, symbol=symbol)
+            self.exchange.cancel_order(order_id, symbol=symbol, params={"type": "future"})
             return True
         except Exception:
+            return self._cancel_algo_order(order_id=order_id, symbol=symbol)
+
+    def _cancel_algo_order(self, *, order_id: str, symbol: str, client_order_id: str | None = None) -> bool:
+        method_names = (
+            "fapiPrivateDeleteAlgoOrder",
+            "fapiprivateDeleteAlgoorder",
+            "fapiprivate_delete_algoorder",
+        )
+        method = None
+        for name in method_names:
+            candidate = getattr(self.exchange, name, None)
+            if callable(candidate):
+                method = candidate
+                break
+        if method is None:
             return False
+
+        symbol_key = self._market_symbol_key(symbol)
+        payloads: list[dict[str, Any]] = []
+        if client_order_id:
+            payloads.append({"symbol": symbol_key, "clientAlgoId": str(client_order_id)})
+        payloads.extend(
+            [
+                {"symbol": symbol_key, "algoId": str(order_id)},
+                {"symbol": symbol_key, "orderId": str(order_id)},
+                {"symbol": symbol_key, "id": str(order_id)},
+            ]
+        )
+        for payload in payloads:
+            try:
+                method(payload)
+                return True
+            except Exception:
+                continue
+        return False
+
+    def cancel_all_algo_orders(
+        self,
+        *,
+        symbol: str,
+        keep_client_order_ids: set[str] | None = None,
+    ) -> int:
+        get_method_names = (
+            "fapiPrivateGetOpenAlgoOrders",
+            "fapiprivateGetOpenalgoorders",
+            "fapiprivate_get_openalgoorders",
+        )
+        get_method = None
+        for name in get_method_names:
+            candidate = getattr(self.exchange, name, None)
+            if callable(candidate):
+                get_method = candidate
+                break
+        if get_method is None:
+            return 0
+
+        keep = {str(v) for v in (keep_client_order_ids or set()) if str(v)}
+        symbol_key = self._market_symbol_key(symbol)
+        try:
+            raw = get_method({"symbol": symbol_key})
+        except Exception:
+            return 0
+        if not isinstance(raw, list):
+            return 0
+
+        canceled = 0
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            client_algo_id = str(row.get("clientAlgoId") or row.get("clientOrderId") or "")
+            if client_algo_id and client_algo_id in keep:
+                continue
+            algo_id = row.get("algoId", row.get("orderId", row.get("id")))
+            if algo_id is None:
+                continue
+            if self._cancel_algo_order(order_id=str(algo_id), symbol=symbol, client_order_id=client_algo_id or None):
+                canceled += 1
+        return canceled
 
     def reconcile_runtime_state(
         self,
@@ -1311,7 +1815,7 @@ class LiveBinanceBroker(Broker):
         try:
             fetch_open_orders = getattr(self.exchange, "fetch_open_orders", None)
             if callable(fetch_open_orders):
-                live_open = fetch_open_orders(symbol)
+                live_open = fetch_open_orders(symbol, None, None, {"type": "future"})
                 live_count = len(live_open) if isinstance(live_open, list) else 0
                 if live_count != len(open_orders):
                     return False, f"open order mismatch expected={len(open_orders)} live={live_count}"
@@ -1335,9 +1839,23 @@ class LiveBinanceBroker(Broker):
                     self._open_orders[str(cid)] = dict(payload)
 
     def get_balance(self) -> dict[str, float]:
-        balance = self.exchange.fetch_balance()
+        balance = self._retry_fetch_balance_payload()
         total = balance.get("total", {})
         return {k: float(v) for k, v in total.items() if isinstance(v, (int, float))}
+
+    def get_account_budget_snapshot(self, *, quote_asset: str = "USDT") -> dict[str, Any]:
+        payload = self._retry_fetch_balance_payload()
+        if not isinstance(payload, dict):
+            return {
+                "asset": str(quote_asset).upper(),
+                "available_balance": 0.0,
+                "total_balance": 0.0,
+                "account_available_usdt": 0.0,
+                "account_total_usdt": 0.0,
+                "source": "fetch_balance.empty",
+                "endpoint_used": "/fapi/v2/balance",
+            }
+        return self._parse_futures_balance_snapshot(payload, quote_asset=quote_asset)
 
     def get_state_snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -1346,6 +1864,56 @@ class LiveBinanceBroker(Broker):
                 "positions": {k: dict(v) for k, v in self._positions.items()},
                 "last_user_stream_update": self._last_user_stream_update,
             }
+
+    def get_symbol_order_constraints(self, *, symbol: str) -> dict[str, float]:
+        filters = self._symbol_filters(symbol)
+        return {
+            "min_notional": max(self._as_float(filters.get("min_notional", 0.0)), 0.0),
+            "min_qty": max(self._as_float(filters.get("min_qty", 0.0)), 0.0),
+            "step_size": max(self._as_float(filters.get("step_size", 0.0)), 0.0),
+            "tick_size": max(self._as_float(filters.get("tick_size", 0.0)), 0.0),
+        }
+
+    def get_open_orders(self, symbol: str | None = None) -> dict[str, dict[str, Any]]:
+        target_symbol = symbol or "BTC/USDT"
+        out: dict[str, dict[str, Any]] = {}
+        fetch_open_orders = getattr(self.exchange, "fetch_open_orders", None)
+        if callable(fetch_open_orders):
+            try:
+                rows = fetch_open_orders(target_symbol, None, None, {"type": "future"})
+            except Exception:
+                rows = []
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    oid = str(row.get("id") or row.get("orderId") or "")
+                    if not oid:
+                        continue
+                    out[oid] = {
+                        "symbol": str(row.get("symbol", target_symbol)),
+                        "side": str(row.get("side", "")),
+                        "order_type": str(row.get("type", "")),
+                        "qty": self._as_float(row.get("amount", row.get("origQty", 0.0))),
+                        "stop_price": self._as_float(row.get("stopPrice", 0.0)),
+                        "reduce_only": bool((row.get("info") or {}).get("reduceOnly", False)) if isinstance(row.get("info"), dict) else False,
+                        "status": str(row.get("status", "")),
+                    }
+        with self._lock:
+            for cid, payload in self._open_orders.items():
+                if not isinstance(payload, dict):
+                    continue
+                oid = str(payload.get("order_id", cid))
+                out.setdefault(oid, dict(payload))
+        return out
+
+    def get_position_snapshot(self, *, symbol: str) -> dict[str, float]:
+        qty = self._position_qty_from_cache_or_rest(symbol)
+        sym_key = self._market_symbol_key(symbol)
+        with self._lock:
+            row = self._positions.get(sym_key) or self._positions.get(symbol) or {}
+            entry = self._as_float(row.get("entry_price", 0.0))
+        return {"qty": qty, "entry_price": entry}
 
     def close(self) -> None:
         if self._user_stream is not None:

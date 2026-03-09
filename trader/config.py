@@ -27,6 +27,21 @@ def _as_int(value: str | None, default: int) -> int:
     return int(value)
 
 
+def _contains_newline(value: str) -> bool:
+    return ("\n" in value) or ("\r" in value)
+
+
+def _looks_like_hmac_secret(value: str) -> str:
+    text = value.strip()
+    if not text:
+        return "empty"
+    if re.fullmatch(r"[0-9a-fA-F]{32,}", text):
+        return "hex_like"
+    if len(text) % 4 == 0 and re.fullmatch(r"[A-Za-z0-9+/=]{24,}", text):
+        return "base64_like"
+    return "unknown"
+
+
 def _pct_as_fraction(value: str | float | int | None, default: float) -> float:
     if value is None:
         return default
@@ -115,6 +130,7 @@ class AppConfig(BaseModel):
     ema_stop_loss_pct: float = Field(default=0.0, ge=0.0, le=1.0)
     ema_take_profit_pct: float = Field(default=0.0, ge=0.0, le=10.0)
     live_trading: bool = False
+    budget_guard_enabled: bool = True
     use_user_stream: bool = False
     listenkey_renew_secs: int = Field(default=1800, ge=60)
     enable_protective_orders: bool = True
@@ -124,7 +140,7 @@ class AppConfig(BaseModel):
     run_state_save_every_n_bars: int = Field(default=1, ge=1)
     run_fixed_notional_usdt: float = Field(default=100.0, gt=0.0)
     max_order_notional: float = Field(default=1_000.0, gt=0.0)
-    max_position_notional: float = Field(default=10_000.0, gt=0.0)
+    max_position_notional: float = Field(default=4_000.0, gt=0.0)
     max_daily_loss: float = Field(default=500.0, gt=0.0)
     max_drawdown_pct: float = Field(default=0.2, ge=0.0, le=1.0)
     max_atr_pct: float = Field(default=0.05, ge=0.0, le=1.0)
@@ -144,12 +160,26 @@ class AppConfig(BaseModel):
     binance_testnet: bool = True
     binance_api_key: SecretStr | None = None
     binance_api_secret: SecretStr | None = None
+    binance_api_key_source: str = "none"
+    binance_api_secret_source: str = "none"
+    binance_api_key_source_origin: str = "none"
+    binance_api_secret_source_origin: str = "none"
+    binance_api_key_len: int = 0
+    binance_api_key_prefix: str = ""
+    binance_api_secret_len: int = 0
+    binance_api_key_has_whitespace: bool = False
+    binance_api_secret_has_whitespace: bool = False
+    binance_api_key_contains_newline: bool = False
+    binance_api_secret_contains_newline: bool = False
+    binance_api_secret_looks_like_hmac: str = "unknown"
+    env_file_used: str | None = None
 
     # Sleep Mode related controls
     preset_name: str | None = None
     sleep_mode: bool = False
-    account_allocation_pct: float = Field(default=0.2, ge=0.0, le=1.0)
-    max_position_notional_usdt: float = Field(default=2_000.0, gt=0.0)
+    account_allocation_pct: float = Field(default=0.4, ge=0.0, le=1.0)
+    max_position_notional_usdt: float = Field(default=4_000.0, gt=0.0)
+    min_entry_notional_usdt: float = Field(default=250.0, ge=0.0)
     risk_per_trade_pct: float = Field(default=0.005, ge=0.0, le=1.0)
     daily_loss_limit_pct: float = Field(default=0.02, ge=0.0, le=1.0)
     consec_loss_limit: int = Field(default=5, ge=1)
@@ -167,6 +197,8 @@ class AppConfig(BaseModel):
     heartbeat_enabled: bool = False
     heartbeat_interval_minutes: int = Field(default=30, ge=1)
     capital_limit_usdt: float | None = Field(default=None, gt=0.0)
+    budget_usdt_mode: Literal["risk", "auto", "fixed"] = "risk"
+    budget_usdt_value: float | None = Field(default=None, gt=0.0)
 
     @model_validator(mode="after")
     def _validate_windows(self) -> "AppConfig":
@@ -222,7 +254,12 @@ class AppConfig(BaseModel):
         return merged_defaults.get(env_key)
 
     @classmethod
-    def from_env(cls, *, preset: str | None = None) -> "AppConfig":
+    def from_env(
+        cls,
+        *,
+        preset: str | None = None,
+        binance_env_override: Literal["mainnet", "testnet"] | None = None,
+    ) -> "AppConfig":
         builtins: dict[str, Any] = {
             "APP_MODE": "backtest",
             "SYMBOL": "BTC/USDT",
@@ -247,6 +284,7 @@ class AppConfig(BaseModel):
             "EMA_STOP_LOSS_PCT": 0.0,
             "EMA_TAKE_PROFIT_PCT": 0.0,
             "LIVE_TRADING": False,
+            "BUDGET_GUARD_ENABLED": True,
             "USE_USER_STREAM": False,
             "LISTENKEY_RENEW_SECS": 1800,
             "ENABLE_PROTECTIVE_ORDERS": True,
@@ -256,7 +294,7 @@ class AppConfig(BaseModel):
             "RUN_STATE_SAVE_EVERY_N_BARS": 1,
             "RUN_FIXED_NOTIONAL_USDT": 100.0,
             "MAX_ORDER_NOTIONAL": 1000.0,
-            "MAX_POSITION_NOTIONAL": 10000.0,
+            "MAX_POSITION_NOTIONAL": 4000.0,
             "MAX_DAILY_LOSS": 500.0,
             "MAX_DRAWDOWN_PCT": 0.2,
             "MAX_ATR_PCT": 0.05,
@@ -272,8 +310,9 @@ class AppConfig(BaseModel):
             "BINANCE_ENV": "testnet",
             "BINANCE_TESTNET": True,
             # Sleep mode defaults
-            "ACCOUNT_ALLOCATION_PCT": 0.2,
-            "MAX_POSITION_NOTIONAL_USDT": 2000.0,
+            "ACCOUNT_ALLOCATION_PCT": 0.4,
+            "MAX_POSITION_NOTIONAL_USDT": 4000.0,
+            "MIN_ENTRY_NOTIONAL_USDT": 250.0,
             "RISK_PER_TRADE_PCT": 0.005,
             "DAILY_LOSS_LIMIT_PCT": 0.02,
             "CONSEC_LOSS_LIMIT": 5,
@@ -326,19 +365,35 @@ class AppConfig(BaseModel):
             binance_env = env_mode
         else:
             binance_env = "testnet" if _as_bool(str(v("BINANCE_TESTNET")), default=True) else "mainnet"
+        if binance_env_override in {"mainnet", "testnet"}:
+            binance_env = str(binance_env_override)
 
-        generic_key = str(v("BINANCE_API_KEY") or "").strip()
-        generic_secret = str(v("BINANCE_API_SECRET") or "").strip()
-        testnet_key = str(v("BINANCE_TESTNET_API_KEY") or "").strip()
-        testnet_secret = str(v("BINANCE_TESTNET_API_SECRET") or "").strip()
-        mainnet_key = str(v("BINANCE_MAINNET_API_KEY") or "").strip()
-        mainnet_secret = str(v("BINANCE_MAINNET_API_SECRET") or "").strip()
+        def _pick_value(*names: str) -> tuple[str, str, str, bool, bool]:
+            for name in names:
+                raw = v(name)
+                text = "" if raw is None else str(raw)
+                stripped = text.strip()
+                if stripped:
+                    origin = "process_env" if name in os.environ else "merged_defaults"
+                    return stripped, name, origin, (text != stripped), _contains_newline(text)
+            return "", "none", "none", False, False
+
         if binance_env == "testnet":
-            key = testnet_key or generic_key
-            secret = testnet_secret or generic_secret
+            key, key_source, key_source_origin, key_has_ws, key_has_nl = _pick_value(
+                "BINANCE_TESTNET_API_KEY", "BINANCE_API_KEY"
+            )
+            secret, secret_source, secret_source_origin, secret_has_ws, secret_has_nl = _pick_value(
+                "BINANCE_TESTNET_API_SECRET", "BINANCE_API_SECRET"
+            )
         else:
-            key = mainnet_key or generic_key
-            secret = mainnet_secret or generic_secret
+            key, key_source, key_source_origin, key_has_ws, key_has_nl = _pick_value(
+                "BINANCE_MAINNET_API_KEY", "BINANCE_API_KEY"
+            )
+            secret, secret_source, secret_source_origin, secret_has_ws, secret_has_nl = _pick_value(
+                "BINANCE_MAINNET_API_SECRET", "BINANCE_API_SECRET"
+            )
+        key_prefix = key[:4]
+        secret_like = _looks_like_hmac_secret(secret)
         telegram_bot_token = str(v("TELEGRAM_BOT_TOKEN") or "").strip()
         telegram_chat_id = str(v("TELEGRAM_CHAT_ID") or "").strip()
         discord_webhook_url = str(v("DISCORD_WEBHOOK_URL") or "").strip()
@@ -349,6 +404,20 @@ class AppConfig(BaseModel):
 
         capital_limit_raw = str(v("CAPITAL_LIMIT_USDT") or "").strip()
         capital_limit_usdt = float(capital_limit_raw) if capital_limit_raw else None
+        budget_usdt_raw = str(v("BUDGET_USDT") or "").strip().lower()
+        budget_usdt_mode: Literal["risk", "auto", "fixed"] = "risk"
+        budget_usdt_value: float | None = None
+        if budget_usdt_raw:
+            if budget_usdt_raw == "auto":
+                budget_usdt_mode = "auto"
+            else:
+                try:
+                    parsed_budget = float(budget_usdt_raw)
+                except ValueError:
+                    parsed_budget = 0.0
+                if parsed_budget > 0:
+                    budget_usdt_mode = "fixed"
+                    budget_usdt_value = parsed_budget
 
         return cls(
             mode=str(v("APP_MODE") or "backtest"),
@@ -374,6 +443,7 @@ class AppConfig(BaseModel):
             ema_stop_loss_pct=_pct_as_fraction(v("EMA_STOP_LOSS_PCT"), 0.0),
             ema_take_profit_pct=_pct_as_fraction(v("EMA_TAKE_PROFIT_PCT"), 0.0),
             live_trading=_as_bool(str(v("LIVE_TRADING")), default=False),
+            budget_guard_enabled=_as_bool(str(v("BUDGET_GUARD_ENABLED")), default=True),
             use_user_stream=_as_bool(str(v("USE_USER_STREAM")), default=False),
             listenkey_renew_secs=int(v("LISTENKEY_RENEW_SECS") or 1800),
             enable_protective_orders=_as_bool(str(v("ENABLE_PROTECTIVE_ORDERS")), default=True),
@@ -383,7 +453,7 @@ class AppConfig(BaseModel):
             run_state_save_every_n_bars=int(v("RUN_STATE_SAVE_EVERY_N_BARS") or 1),
             run_fixed_notional_usdt=float(v("RUN_FIXED_NOTIONAL_USDT") or 100.0),
             max_order_notional=float(v("MAX_ORDER_NOTIONAL") or 1000.0),
-            max_position_notional=float(v("MAX_POSITION_NOTIONAL") or v("MAX_POSITION_NOTIONAL_USDT") or 10000.0),
+            max_position_notional=float(v("MAX_POSITION_NOTIONAL") or v("MAX_POSITION_NOTIONAL_USDT") or 4000.0),
             max_daily_loss=float(v("MAX_DAILY_LOSS") or 500.0),
             max_drawdown_pct=_pct_as_fraction(v("MAX_DRAWDOWN_PCT"), 0.2),
             max_atr_pct=_pct_as_fraction(v("MAX_ATR_PCT"), 0.05),
@@ -403,10 +473,24 @@ class AppConfig(BaseModel):
             binance_testnet=(binance_env == "testnet"),
             binance_api_key=SecretStr(key) if key else None,
             binance_api_secret=SecretStr(secret) if secret else None,
+            binance_api_key_source=key_source,
+            binance_api_secret_source=secret_source,
+            binance_api_key_source_origin=key_source_origin,
+            binance_api_secret_source_origin=secret_source_origin,
+            binance_api_key_len=len(key),
+            binance_api_key_prefix=key_prefix,
+            binance_api_secret_len=len(secret),
+            binance_api_key_has_whitespace=key_has_ws,
+            binance_api_secret_has_whitespace=secret_has_ws,
+            binance_api_key_contains_newline=key_has_nl,
+            binance_api_secret_contains_newline=secret_has_nl,
+            binance_api_secret_looks_like_hmac=secret_like,
+            env_file_used=(str(dotenv_path.resolve()) if dotenv_path is not None else None),
             preset_name=preset_path.name if preset_path else (str(requested_preset) if requested_preset else None),
             sleep_mode=_as_bool(str(v("SLEEP_MODE")), default=False),
-            account_allocation_pct=_pct_as_fraction(v("ACCOUNT_ALLOCATION_PCT"), 0.2),
-            max_position_notional_usdt=float(v("MAX_POSITION_NOTIONAL_USDT") or v("MAX_POSITION_NOTIONAL") or 2000.0),
+            account_allocation_pct=_pct_as_fraction(v("ACCOUNT_ALLOCATION_PCT"), 0.4),
+            max_position_notional_usdt=float(v("MAX_POSITION_NOTIONAL_USDT") or v("MAX_POSITION_NOTIONAL") or 4000.0),
+            min_entry_notional_usdt=float(v("MIN_ENTRY_NOTIONAL_USDT") or 250.0),
             risk_per_trade_pct=_pct_as_fraction(v("RISK_PER_TRADE_PCT"), 0.005),
             daily_loss_limit_pct=_pct_as_fraction(v("DAILY_LOSS_LIMIT_PCT"), 0.02),
             consec_loss_limit=int(v("CONSEC_LOSS_LIMIT") or 5),
@@ -424,4 +508,6 @@ class AppConfig(BaseModel):
             heartbeat_enabled=_as_bool(str(v("HEARTBEAT_ENABLED")), default=False),
             heartbeat_interval_minutes=int(v("HEARTBEAT_INTERVAL_MINUTES") or 30),
             capital_limit_usdt=capital_limit_usdt,
+            budget_usdt_mode=budget_usdt_mode,
+            budget_usdt_value=budget_usdt_value,
         )

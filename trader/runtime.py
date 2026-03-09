@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import queue
 import threading
 import time
@@ -60,10 +61,14 @@ class RuntimeConfig:
     # Sleep mode profile / diagnostics
     binance_env: Literal["mainnet", "testnet"] = "testnet"
     live_trading_enabled: bool = False
+    budget_guard_enabled: bool = True
+    budget_usdt_mode: Literal["risk", "auto", "fixed"] = "risk"
+    budget_usdt_fixed: float | None = None
     preset_name: str | None = None
     sleep_mode_enabled: bool = False
     account_allocation_pct: float = 1.0
-    max_position_notional_usdt: float = 10_000.0
+    max_position_notional_usdt: float = 4_000.0
+    min_entry_notional_usdt: float = 250.0
     risk_per_trade_pct: float = 0.0
     daily_loss_limit_pct: float = 0.0
     capital_limit_usdt: float | None = None
@@ -79,6 +84,179 @@ class RuntimeConfig:
     quiet_hours: str | None = None
     heartbeat_enabled: bool = False
     heartbeat_interval_minutes: int = 30
+    protective_integrity_retries: int = 2
+
+
+class AccountBudgetGuard:
+    def __init__(self, *, broker: Broker, quote_asset: str = "USDT") -> None:
+        self.broker = broker
+        self.quote_asset = str(quote_asset).upper()
+        self._lock = threading.Lock()
+        self._snapshot_bar_key: str | None = None
+        self._available_balance = 0.0
+        self._total_balance = 0.0
+        self._reserved_notional = 0.0
+        self._asset = self.quote_asset
+        self._source = "uninitialized"
+
+    def _as_float(self, value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _normalize_snapshot(self, payload: dict[str, Any]) -> dict[str, Any]:
+        available = self._as_float(
+            payload.get(
+                "available_balance",
+                payload.get(
+                    "account_available_usdt",
+                    payload.get("available", payload.get("free", payload.get("withdraw_available", 0.0))),
+                ),
+            )
+        )
+        total = self._as_float(
+            payload.get(
+                "total_balance",
+                payload.get("account_total_usdt", payload.get("total", payload.get("balance", 0.0))),
+            )
+        )
+        asset = str(payload.get("asset", self.quote_asset)).upper()
+        source = str(payload.get("source", "broker.get_account_budget_snapshot"))
+        return {
+            "asset": asset,
+            "available_balance": max(available, 0.0),
+            "total_balance": max(total, 0.0),
+            "source": source,
+        }
+
+    def _fallback_snapshot(self) -> dict[str, Any]:
+        balance = self.broker.get_balance()
+        available = 0.0
+        total = 0.0
+        if isinstance(balance, dict):
+            available = self._as_float(balance.get(self.quote_asset, balance.get("cash", 0.0)))
+            total = self._as_float(balance.get(self.quote_asset, balance.get("cash", available)))
+        return {
+            "asset": self.quote_asset,
+            "available_balance": max(available, 0.0),
+            "total_balance": max(total, 0.0),
+            "account_available_usdt": max(available, 0.0),
+            "account_total_usdt": max(total, 0.0),
+            "source": "broker.get_balance",
+        }
+
+    def _refresh_snapshot_locked(self, *, bar_key: str) -> dict[str, Any]:
+        getter = getattr(self.broker, "get_account_budget_snapshot", None)
+        snapshot: dict[str, Any]
+        if callable(getter):
+            try:
+                try:
+                    raw = getter(quote_asset=self.quote_asset)
+                except TypeError:
+                    raw = getter()
+            except Exception:
+                raw = None
+            if isinstance(raw, dict):
+                snapshot = self._normalize_snapshot(raw)
+            else:
+                snapshot = self._fallback_snapshot()
+        else:
+            snapshot = self._fallback_snapshot()
+        self._snapshot_bar_key = bar_key
+        self._available_balance = float(snapshot["available_balance"])
+        self._total_balance = float(snapshot["total_balance"])
+        self._reserved_notional = 0.0
+        self._asset = str(snapshot["asset"])
+        self._source = str(snapshot["source"])
+        return snapshot
+
+    def snapshot(self, *, bar_ts: pd.Timestamp | None = None) -> dict[str, Any]:
+        bar_key = str(pd.to_datetime(bar_ts, utc=True)) if bar_ts is not None else "status"
+        with self._lock:
+            if self._snapshot_bar_key != bar_key:
+                snap = self._refresh_snapshot_locked(bar_key=bar_key)
+            else:
+                snap = {
+                    "asset": self._asset,
+                    "available_balance": self._available_balance,
+                    "total_balance": self._total_balance,
+                    "source": self._source,
+                }
+            account_available = max(self._available_balance - self._reserved_notional, 0.0)
+            snap["account_available_usdt"] = account_available
+            snap["account_total_usdt"] = max(self._total_balance, 0.0)
+            snap["reserved_notional"] = self._reserved_notional
+            snap["effective_available"] = account_available
+            return snap
+
+    def check_and_reserve(
+        self,
+        *,
+        bar_ts: pd.Timestamp,
+        order_notional: float,
+        reduce_only: bool,
+        budget_cap_remaining_usdt: float | None = None,
+    ) -> tuple[bool, dict[str, Any]]:
+        if reduce_only:
+            return True, {"reason": "reduce_only_order", "reserved_notional": 0.0}
+        req_notional = max(float(order_notional), 0.0)
+        if req_notional <= 0:
+            return True, {"reason": "zero_notional_order", "reserved_notional": 0.0}
+
+        bar_key = str(pd.to_datetime(bar_ts, utc=True))
+        with self._lock:
+            if self._snapshot_bar_key != bar_key:
+                self._refresh_snapshot_locked(bar_key=bar_key)
+            account_available = max(self._available_balance - self._reserved_notional, 0.0)
+            budget_cap_remaining = account_available
+            if budget_cap_remaining_usdt is not None:
+                budget_cap_remaining = max(float(budget_cap_remaining_usdt), 0.0)
+            effective_available = min(account_available, budget_cap_remaining)
+            if req_notional > effective_available + 1e-9:
+                return (
+                    False,
+                    {
+                        "reason": "insufficient_budget",
+                        "asset": self._asset,
+                        "bar_ts": bar_key,
+                        "source": self._source,
+                        "available_balance": self._available_balance,
+                        "account_available_usdt": account_available,
+                        "reserved_notional": self._reserved_notional,
+                        "effective_available": effective_available,
+                        "budget_cap_remaining_usdt": budget_cap_remaining,
+                        "requested_notional": req_notional,
+                        "total_balance": self._total_balance,
+                        "account_total_usdt": self._total_balance,
+                    },
+                )
+            self._reserved_notional += req_notional
+            next_account_available = max(self._available_balance - self._reserved_notional, 0.0)
+            return (
+                True,
+                {
+                    "reason": "ok",
+                    "asset": self._asset,
+                    "bar_ts": bar_key,
+                    "source": self._source,
+                    "available_balance": self._available_balance,
+                    "account_available_usdt": next_account_available,
+                    "reserved_notional": self._reserved_notional,
+                    "effective_available": min(next_account_available, budget_cap_remaining),
+                    "budget_cap_remaining_usdt": budget_cap_remaining,
+                    "requested_notional": req_notional,
+                    "total_balance": self._total_balance,
+                    "account_total_usdt": self._total_balance,
+                },
+            )
+
+    def release(self, *, order_notional: float) -> None:
+        amount = max(float(order_notional), 0.0)
+        if amount <= 0:
+            return
+        with self._lock:
+            self._reserved_notional = max(self._reserved_notional - amount, 0.0)
 
 
 class RuntimeEngine:
@@ -91,6 +269,7 @@ class RuntimeEngine:
         feed: BinanceLiveFeed,
         storage: SQLiteStorage,
         risk_guard: RiskGuard,
+        budget_guard: AccountBudgetGuard | None = None,
         notifier: Notifier | None = None,
         initial_equity: float = 10_000.0,
         run_id: str | None = None,
@@ -101,6 +280,7 @@ class RuntimeEngine:
         self.feed = feed
         self.storage = storage
         self.risk_guard = risk_guard
+        self.budget_guard = budget_guard
         self.notifier = notifier
         self.run_id = run_id or uuid4().hex
         self.initial_equity = float(initial_equity)
@@ -126,10 +306,17 @@ class RuntimeEngine:
         self._strategy_state: dict[str, Any] = {}
         self._consecutive_losses = 0
         self._last_heartbeat_sent_at: datetime | None = None
+        self._last_order_block_reason = ""
+        self._rejected_by_min_notional_count = 0
+        self._protective_fail_count = 0
+        self._min_entry_notional_block_count = 0
+        self._min_entry_notional_samples: list[dict[str, Any]] = []
         self._session_started = False
         self._session_processed = 0
         self._last_processed_bar_ts: pd.Timestamp | None = None
         self._last_bar_recv_monotonic: float | None = None
+        if self.budget_guard is None and self.config.mode == "live" and self.config.budget_guard_enabled:
+            self.budget_guard = AccountBudgetGuard(broker=self.broker)
 
         if self.config.resume:
             self._restore_runtime_state()
@@ -177,13 +364,25 @@ class RuntimeEngine:
             return float(self._bars[-1].close)
         return float(self.position_entry_price) if self.position_entry_price > 0 else 0.0
 
+    def _broker_label(self) -> str:
+        if self.config.mode == "live":
+            return "live_binance"
+        name = self.broker.__class__.__name__.lower()
+        if "paper" in name:
+            return "paper"
+        return name
+
     def _runtime_profile_payload(self) -> dict[str, Any]:
         return {
             "mode": self.config.mode,
             "symbol": self.config.symbol,
             "timeframe": self.config.timeframe,
+            "broker": self._broker_label(),
             "env": self.config.binance_env,
             "live_trading": self.config.live_trading_enabled,
+            "budget_guard": self.config.budget_guard_enabled,
+            "budget_usdt_mode": self.config.budget_usdt_mode,
+            "budget_usdt_fixed": self.config.budget_usdt_fixed,
             "dry_run": self.config.dry_run,
             "sleep_mode": self.config.sleep_mode_enabled,
             "preset": self.config.preset_name,
@@ -193,6 +392,7 @@ class RuntimeEngine:
             "max_drawdown_pct": self.risk_guard.max_drawdown_pct,
             "risk_per_trade_pct": self.config.risk_per_trade_pct,
             "max_position_notional_usdt": self.config.max_position_notional_usdt,
+            "min_entry_notional_usdt": self.config.min_entry_notional_usdt,
             "protective_mode": self.config.protective_missing_policy,
             "sl_mode": self.config.sl_mode,
             "sl_pct": self.config.protective_stop_loss_pct,
@@ -480,6 +680,89 @@ class RuntimeEngine:
             required.add("tp")
         return required
 
+    def _emergency_close_position(self, *, bar: LiveBar, reason: str) -> bool:
+        side = self._position_side()
+        if side == "flat":
+            return True
+        close_side: Literal["BUY", "SELL"] = "SELL" if side == "long" else "BUY"
+        qty = abs(float(self.position_qty))
+        if qty <= 0:
+            return True
+        req = OrderRequest(
+            symbol=self.config.symbol,
+            side=close_side,
+            amount=qty,
+            order_type="MARKET",
+            client_order_id=self._make_client_order_id(bar=bar, intent=f"emergency-close-{side}"),
+            reduce_only=True,
+            position_side="BOTH",
+        )
+        try:
+            result = self.broker.place_order(req)
+        except Exception as exc:
+            self._event(
+                "protective_emergency_close_failed",
+                {"reason": reason, "error": str(exc), "side": side, "qty": qty},
+            )
+            return False
+
+        self._save_order(bar, "exit", req, result)
+        if result.status == "FILLED":
+            if not bool(getattr(self.broker, "handles_fill_persistence", False)):
+                self._save_fill(bar, req, result)
+            self._apply_fill(
+                bar=bar,
+                side=close_side,
+                qty=result.filled_qty,
+                price=result.avg_price,
+                fee=result.fee,
+                reason="protective_emergency_close",
+            )
+        else:
+            self._event(
+                "protective_emergency_close_unfilled",
+                {"reason": reason, "status": result.status, "message": result.message, "side": side, "qty": qty},
+            )
+
+        if self.config.mode == "live":
+            snapshot = self._fetch_live_position_snapshot()
+            if snapshot is not None:
+                self._apply_live_position_snapshot(bar=bar, snapshot=snapshot, source="emergency_close_sync")
+        return self._position_side() == "flat"
+
+    def _handle_protective_failure(
+        self,
+        *,
+        bar: LiveBar,
+        reason: str,
+        missing: list[str],
+        error: str | None = None,
+    ) -> None:
+        self._protective_fail_count += 1
+        self._event(
+            "protective_order_failed",
+            {
+                "reason": reason,
+                "missing": ",".join(missing),
+                "error": error or "",
+                "attempted_emergency_close": True,
+            },
+        )
+        closed = self._emergency_close_position(bar=bar, reason=reason)
+        if self._position_side() == "flat":
+            self._cancel_all_protective_orders(bar=bar, reason="protective_failure_cleanup")
+        self._halt(
+            reason="protective_order_failed_emergency_close",
+            event_type="protective_orders_halt",
+            payload={
+                "failure_reason": reason,
+                "missing": ",".join(missing),
+                "error": error or "",
+                "emergency_close_success": closed,
+            },
+            error_summary=error,
+        )
+
     def _enforce_protective_integrity(self, *, bar: LiveBar) -> None:
         if not self.config.enable_protective_orders or not self.config.require_protective_orders:
             return
@@ -500,9 +783,21 @@ class RuntimeEngine:
             "protective_orders_missing",
             {"missing": ",".join(missing), "policy": self.config.protective_missing_policy},
         )
-        if self.config.protective_missing_policy == "recreate":
+        retries = max(int(self.config.protective_integrity_retries), 0)
+        for attempt in range(retries):
+            if self.halted:
+                return
+            self._event(
+                "protective_orders_recreate_attempt",
+                {
+                    "attempt": attempt + 1,
+                    "max_attempts": retries,
+                    "missing": ",".join(missing),
+                    "policy": self.config.protective_missing_policy,
+                },
+            )
             self._cancel_all_protective_orders(bar=bar, reason="recreate_missing_protective")
-            self._maybe_create_protective_orders(bar=bar)
+            self._maybe_create_protective_orders(bar=bar, fail_on_missing=False)
             current = {
                 str(meta.get("kind", "")).lower()
                 for meta in self._open_orders.values()
@@ -511,10 +806,11 @@ class RuntimeEngine:
             if required.issubset(current):
                 self._event("protective_orders_recreated", {"required": ",".join(sorted(required))})
                 return
-        self._halt(
+            missing = sorted(required - current)
+        self._handle_protective_failure(
+            bar=bar,
             reason="position exists without required protective orders",
-            event_type="protective_orders_halt",
-            payload={"missing": ",".join(missing)},
+            missing=missing,
         )
 
     def _save_order(self, bar: LiveBar, signal: str, request: OrderRequest, result: OrderResult) -> None:
@@ -666,6 +962,302 @@ class RuntimeEngine:
         raw = f"{self.run_id}:{self.config.symbol}:{int(bar.timestamp.timestamp())}:{intent}"
         return f"rt-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:24]}"
 
+    def _round_up_to_step(self, *, value: float, step: float) -> float:
+        if step <= 0:
+            return max(float(value), 0.0)
+        units = math.ceil(max(float(value), 0.0) / step - 1e-12)
+        return max(units * step, 0.0)
+
+    def _get_symbol_order_constraints(self) -> dict[str, float]:
+        getter = getattr(self.broker, "get_symbol_order_constraints", None)
+        if not callable(getter):
+            return {"min_notional": 0.0, "min_qty": 0.0, "step_size": 0.0, "tick_size": 0.0}
+        try:
+            try:
+                raw = getter(symbol=self.config.symbol)
+            except TypeError:
+                raw = getter(self.config.symbol)
+        except Exception:
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return {
+            "min_notional": float(raw.get("min_notional", 0.0) or 0.0),
+            "min_qty": float(raw.get("min_qty", 0.0) or 0.0),
+            "step_size": float(raw.get("step_size", 0.0) or 0.0),
+            "tick_size": float(raw.get("tick_size", 0.0) or 0.0),
+        }
+
+    def _account_budget_snapshot(self, *, bar_ts: pd.Timestamp | None = None) -> dict[str, float | str]:
+        def _to_float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        if self.budget_guard is None or not self.config.budget_guard_enabled:
+            return {
+                "account_available_usdt": 0.0,
+                "account_total_usdt": 0.0,
+                "source": "budget_guard_disabled",
+            }
+        snap_ts = bar_ts if bar_ts is not None else pd.Timestamp.now(tz="UTC")
+        try:
+            snapshot = self.budget_guard.snapshot(bar_ts=snap_ts)
+        except Exception:
+            snapshot = {}
+        return {
+            "account_available_usdt": _to_float(
+                snapshot.get("account_available_usdt", snapshot.get("available_balance", 0.0)) if isinstance(snapshot, dict) else 0.0
+            ),
+            "account_total_usdt": _to_float(
+                snapshot.get("account_total_usdt", snapshot.get("total_balance", 0.0)) if isinstance(snapshot, dict) else 0.0
+            ),
+            "source": str(snapshot.get("source", "budget_guard_unavailable")) if isinstance(snapshot, dict) else "budget_guard_unavailable",
+        }
+
+    def _resolve_budget_cap(
+        self,
+        *,
+        equity: float,
+        current_exposure_notional: float,
+        account_available_usdt: float,
+    ) -> tuple[float, float, str]:
+        mode = str(self.config.budget_usdt_mode or "risk").lower()
+        cap_source = "risk"
+        budget_cap_usdt = self.risk_guard.budget_usdt(equity=equity)
+        if mode == "fixed" and (self.config.budget_usdt_fixed or 0.0) > 0:
+            budget_cap_usdt = float(self.config.budget_usdt_fixed or 0.0)
+            cap_source = "fixed"
+        elif mode == "auto":
+            if account_available_usdt > 0:
+                budget_cap_usdt = float(account_available_usdt)
+                cap_source = "auto_available_usdt"
+            else:
+                cap_source = "auto_fallback_risk"
+        budget_cap_remaining_usdt = max(float(budget_cap_usdt) - float(current_exposure_notional), 0.0)
+        return max(float(budget_cap_usdt), 0.0), budget_cap_remaining_usdt, cap_source
+
+    def _apply_minimum_entry_constraints(
+        self,
+        *,
+        signal: Signal,
+        intent: str,
+        price: float,
+        qty: float,
+    ) -> tuple[float, float, bool]:
+        constraints = self._get_symbol_order_constraints()
+        min_notional = max(float(constraints.get("min_notional", 0.0)), 0.0)
+        min_qty = max(float(constraints.get("min_qty", 0.0)), 0.0)
+        step_size = max(float(constraints.get("step_size", 0.0)), 0.0)
+        qty_before = max(float(qty), 0.0)
+        qty_after = qty_before
+        attempted_notional = qty_before * max(float(price), 0.0)
+
+        if step_size > 0:
+            qty_after = self._round_up_to_step(value=qty_after, step=step_size)
+        if min_qty > 0 and qty_after < min_qty:
+            qty_after = self._round_up_to_step(value=min_qty, step=step_size if step_size > 0 else min_qty)
+
+        if min_notional > 0 and attempted_notional + 1e-9 < min_notional:
+            self._rejected_by_min_notional_count += 1
+            self._last_order_block_reason = "entry_notional_too_small"
+            self._event(
+                "entry_notional_too_small",
+                {
+                    "signal": signal,
+                    "intent": intent,
+                    "attempted_notional": attempted_notional,
+                    "final_notional": qty_after * price,
+                    "min_notional": min_notional,
+                    "qty_before_round": qty_before,
+                    "qty_after_round": qty_after,
+                    "skip_reason": "attempted_notional_below_min_notional",
+                    "min_qty": min_qty,
+                    "step_size": step_size,
+                    "tick_size": float(constraints.get("tick_size", 0.0)),
+                },
+            )
+            return 0.0, 0.0, True
+
+        if min_notional > 0 and price > 0 and (qty_after * price) + 1e-9 < min_notional:
+            needed_qty = min_notional / price
+            qty_after = self._round_up_to_step(value=max(qty_after, needed_qty), step=step_size if step_size > 0 else needed_qty)
+            if min_qty > 0 and qty_after < min_qty:
+                qty_after = self._round_up_to_step(value=min_qty, step=step_size if step_size > 0 else min_qty)
+
+        final_notional = qty_after * max(price, 0.0)
+        if abs(qty_after - qty_before) > 1e-12:
+            self._event(
+                "entry_size_rounded",
+                {
+                    "signal": signal,
+                    "intent": intent,
+                    "attempted_notional": attempted_notional,
+                    "final_notional": final_notional,
+                    "min_notional": min_notional,
+                    "qty_before_round": qty_before,
+                    "qty_after_round": qty_after,
+                    "skip_reason": "",
+                    "min_qty": min_qty,
+                    "step_size": step_size,
+                    "tick_size": float(constraints.get("tick_size", 0.0)),
+                },
+            )
+        return qty_after, final_notional, False
+
+    def _record_min_entry_notional_block(
+        self,
+        *,
+        requested_notional: float,
+        price: float,
+        qty_before_round: float,
+        qty_after_round: float,
+    ) -> None:
+        self._min_entry_notional_block_count += 1
+        sample = {
+            "symbol": self.config.symbol,
+            "requested_notional": float(requested_notional),
+            "min_entry_notional": float(self.config.min_entry_notional_usdt),
+            "price": float(price),
+            "qty_before_round": float(qty_before_round),
+            "qty_after_round": float(qty_after_round),
+        }
+        self._min_entry_notional_samples.append(sample)
+        if len(self._min_entry_notional_samples) > 5:
+            self._min_entry_notional_samples = self._min_entry_notional_samples[-5:]
+
+    def _fetch_live_position_snapshot(self) -> dict[str, float] | None:
+        getter = getattr(self.broker, "get_position_snapshot", None)
+        if not callable(getter):
+            return None
+        try:
+            try:
+                raw = getter(symbol=self.config.symbol)
+            except TypeError:
+                raw = getter(self.config.symbol)
+        except Exception:
+            return None
+        if not isinstance(raw, dict):
+            return None
+        return {
+            "qty": float(raw.get("qty", 0.0)),
+            "entry_price": float(raw.get("entry_price", 0.0)),
+        }
+
+    def _apply_live_position_snapshot(self, *, bar: LiveBar, snapshot: dict[str, float], source: str) -> None:
+        prev_qty = float(self.position_qty)
+        prev_entry = float(self.position_entry_price)
+        live_qty = float(snapshot.get("qty", 0.0))
+        live_entry = float(snapshot.get("entry_price", 0.0))
+        same_qty = abs(live_qty - prev_qty) < 1e-12
+        same_entry = abs(live_entry - prev_entry) < 1e-9
+        if same_qty and (abs(live_qty) < 1e-12 or same_entry):
+            return
+
+        self.position_qty = live_qty
+        if abs(live_qty) < 1e-12:
+            self.position_qty = 0.0
+            self.position_entry_price = 0.0
+            self.position_entry_ts = ""
+            self.position_fee_pool = 0.0
+        else:
+            if live_entry > 0:
+                self.position_entry_price = live_entry
+            if not self.position_entry_ts:
+                self.position_entry_ts = str(bar.timestamp)
+        self._event(
+            "position_synced_from_broker",
+            {
+                "source": source,
+                "prev_qty": prev_qty,
+                "prev_entry_price": prev_entry,
+                "live_qty": self.position_qty,
+                "live_entry_price": self.position_entry_price,
+            },
+        )
+
+    def _recover_reduce_only_rejection(
+        self,
+        *,
+        bar: LiveBar,
+        signal: Signal,
+        intent: str,
+        side: Literal["BUY", "SELL"],
+        error_text: str,
+    ) -> bool:
+        snapshot = self._fetch_live_position_snapshot()
+        if snapshot is None:
+            return False
+        self._apply_live_position_snapshot(bar=bar, snapshot=snapshot, source="reduce_only_reject")
+        still_reducible = (side == "BUY" and self.position_qty < 0) or (side == "SELL" and self.position_qty > 0)
+        self._event(
+            "reduce_only_rejected_recovered",
+            {
+                "signal": signal,
+                "intent": intent,
+                "side": side,
+                "still_reducible": still_reducible,
+                "error": error_text,
+            },
+        )
+        return True
+
+    def _retry_protective_after_algo_limit_cleanup(
+        self,
+        *,
+        req: OrderRequest,
+        signal: Signal,
+        intent: str,
+        error_text: str,
+    ) -> OrderResult | None:
+        cleanup = getattr(self.broker, "cancel_all_algo_orders", None)
+        if not callable(cleanup):
+            return None
+        keep_client_ids = {
+            str(meta["request"].client_order_id)
+            for meta in self._open_orders.values()
+            if isinstance(meta, dict)
+            and isinstance(meta.get("request"), OrderRequest)
+            and meta["request"].client_order_id
+        }
+        canceled = 0
+        try:
+            try:
+                canceled = int(
+                    cleanup(
+                        symbol=self.config.symbol,
+                        keep_client_order_ids=keep_client_ids,
+                    )
+                    or 0
+                )
+            except TypeError:
+                canceled = int(cleanup(symbol=self.config.symbol) or 0)
+        except Exception as exc:
+            self._event(
+                "algo_order_limit_recovery_failed",
+                {"signal": signal, "intent": intent, "stage": "cleanup", "error": str(exc)},
+            )
+            return None
+
+        self._event(
+            "algo_order_limit_recovery",
+            {
+                "signal": signal,
+                "intent": intent,
+                "canceled_algo_orders": canceled,
+                "error": error_text,
+            },
+        )
+        try:
+            return self.broker.place_order(req)
+        except Exception as exc:
+            self._event(
+                "algo_order_limit_recovery_failed",
+                {"signal": signal, "intent": intent, "stage": "retry", "error": str(exc)},
+            )
+            return None
+
     def _place_order(
         self,
         *,
@@ -682,11 +1274,19 @@ class RuntimeEngine:
         requested_qty = qty if qty is not None else (abs(self.position_qty) if reduce_only else self._order_qty(bar.close))
         if requested_qty <= 0:
             return None
+        order_notional = requested_qty * bar.close
+        self._last_order_block_reason = ""
 
         if not reduce_only:
             equity_now = self._equity(bar.close)
-            order_notional = requested_qty * bar.close
             current_notional = abs(self.position_qty) * bar.close
+            budget_snapshot = self._account_budget_snapshot(bar_ts=pd.to_datetime(bar.timestamp, utc=True))
+            account_available_usdt = float(budget_snapshot.get("account_available_usdt", 0.0))
+            _budget_cap_usdt, budget_cap_remaining_usdt, _budget_cap_source = self._resolve_budget_cap(
+                equity=equity_now,
+                current_exposure_notional=current_notional,
+                account_available_usdt=account_available_usdt,
+            )
             sl_distance_pct = None
             if stop_price is not None and bar.close > 0:
                 sl_distance_pct = abs(stop_price - bar.close) / bar.close
@@ -715,6 +1315,61 @@ class RuntimeEngine:
                         "allowed_notional": allowed_notional,
                     },
                 )
+            min_entry_floor = max(float(self.config.min_entry_notional_usdt), 0.0)
+            if min_entry_floor > 0 and order_notional + 1e-9 < min_entry_floor:
+                self._record_min_entry_notional_block(
+                    requested_notional=order_notional,
+                    price=float(bar.close),
+                    qty_before_round=requested_qty,
+                    qty_after_round=requested_qty,
+                )
+                self._last_order_block_reason = "entry_notional_below_floor"
+                self._event(
+                    "entry_notional_below_floor",
+                    {
+                        "signal": signal,
+                        "intent": intent,
+                        "symbol": self.config.symbol,
+                        "requested_notional": order_notional,
+                        "min_entry_notional": min_entry_floor,
+                        "price": float(bar.close),
+                        "qty_before_round": requested_qty,
+                        "qty_after_round": requested_qty,
+                    },
+                )
+                return None
+            requested_qty, order_notional, skipped_by_min_guard = self._apply_minimum_entry_constraints(
+                signal=signal,
+                intent=intent,
+                price=float(bar.close),
+                qty=requested_qty,
+            )
+            if skipped_by_min_guard:
+                return None
+            allowed_after_round, _ = self.risk_guard.suggest_entry_notional(
+                equity=equity_now,
+                current_position_notional=current_notional,
+                requested_order_notional=order_notional,
+                realized_pnl_today=self.realized_pnl,
+                sl_distance_pct=sl_distance_pct,
+            )
+            if order_notional > max(allowed_after_round, 0.0) + 1e-9:
+                self._event(
+                    "entry_notional_too_small",
+                    {
+                        "signal": signal,
+                        "intent": intent,
+                        "attempted_notional": requested_notional_before,
+                        "final_notional": order_notional,
+                        "min_notional": float(self._get_symbol_order_constraints().get("min_notional", 0.0)),
+                        "qty_before_round": requested_notional_before / max(float(bar.close), 1e-9),
+                        "qty_after_round": requested_qty,
+                        "skip_reason": "min_notional_roundup_exceeds_risk_budget",
+                    },
+                )
+                self._last_order_block_reason = "entry_notional_too_small"
+                self._rejected_by_min_notional_count += 1
+                return None
             ok, reason = self.risk_guard.check_order(
                 current_position_notional=current_notional,
                 order_notional=order_notional,
@@ -725,6 +1380,8 @@ class RuntimeEngine:
                 self._event("risk_blocked_order", {"reason": reason, "signal": signal})
                 self._notify(f"[{self.config.mode}] risk blocked order: {reason}")
                 return None
+        else:
+            budget_cap_remaining_usdt = None
 
         req = OrderRequest(
             symbol=self.config.symbol,
@@ -737,6 +1394,48 @@ class RuntimeEngine:
             time_in_force=time_in_force,
             position_side="BOTH",
         )
+
+        reserved_notional = 0.0
+        if (
+            self.config.budget_guard_enabled
+            and not reduce_only
+            and not self.config.dry_run
+            and self.budget_guard is not None
+        ):
+            try:
+                budget_ok, budget_meta = self.budget_guard.check_and_reserve(
+                    bar_ts=pd.to_datetime(bar.timestamp, utc=True),
+                    order_notional=order_notional,
+                    reduce_only=reduce_only,
+                    budget_cap_remaining_usdt=budget_cap_remaining_usdt,
+                )
+            except Exception as exc:
+                budget_ok = False
+                budget_meta = {
+                    "reason": "insufficient_budget",
+                    "error": str(exc),
+                    "requested_notional": order_notional,
+                }
+            if not budget_ok:
+                self._last_order_block_reason = "insufficient_budget"
+                self._event(
+                    "insufficient_budget",
+                    {
+                        "signal": signal,
+                        "intent": intent,
+                        "symbol": self.config.symbol,
+                        "side": side,
+                        "qty": requested_qty,
+                        "order_notional": order_notional,
+                        **budget_meta,
+                    },
+                )
+                self._notify(
+                    f"[{self.config.mode}] insufficient budget: "
+                    f"requested_notional={order_notional:.4f} detail={budget_meta.get('reason', 'unknown')}"
+                )
+                return None
+            reserved_notional = float(budget_meta.get("requested_notional", order_notional))
 
         if self.config.dry_run:
             result = OrderResult(
@@ -769,18 +1468,67 @@ class RuntimeEngine:
             if self.config.mode == "live":
                 self._consecutive_api_errors = 0
         except Exception as exc:
-            self._register_api_error(where="place_order", error=exc)
-            if self.config.halt_on_error:
-                self._halt(
-                    reason="broker exception with halt_on_error enabled",
-                    event_type="broker_error",
-                    payload={"error": str(exc), "signal": signal, "intent": intent},
-                    error_summary=str(exc),
+            if reserved_notional > 0 and self.budget_guard is not None:
+                self.budget_guard.release(order_notional=reserved_notional)
+            err_text = str(exc)
+            if self.config.mode == "live" and '"code":-4164' in err_text:
+                self._rejected_by_min_notional_count += 1
+                self._last_order_block_reason = "entry_notional_too_small"
+                self._event(
+                    "entry_notional_too_small",
+                    {
+                        "signal": signal,
+                        "intent": intent,
+                        "error": err_text,
+                        "attempted_notional": order_notional,
+                        "final_notional": order_notional,
+                        "min_notional": float(self._get_symbol_order_constraints().get("min_notional", 0.0)),
+                        "qty_before_round": requested_qty,
+                        "qty_after_round": requested_qty,
+                        "skip_reason": "exchange_rejected_min_notional",
+                    },
                 )
                 return None
-            if self.config.mode == "live":
+            if (
+                self.config.mode == "live"
+                and reduce_only
+                and '"code":-2022' in err_text
+                and self._recover_reduce_only_rejection(
+                    bar=bar,
+                    signal=signal,
+                    intent=intent,
+                    side=side,
+                    error_text=err_text,
+                )
+            ):
                 return None
-            raise
+            recovered_result: OrderResult | None = None
+            if self.config.mode == "live" and intent.startswith("protective-") and '"code":-4045' in err_text:
+                recovered_result = self._retry_protective_after_algo_limit_cleanup(
+                    req=req,
+                    signal=signal,
+                    intent=intent,
+                    error_text=err_text,
+                )
+            if recovered_result is not None:
+                result = recovered_result
+                self._consecutive_api_errors = 0
+            else:
+                self._register_api_error(where="place_order", error=exc)
+                if self.config.halt_on_error:
+                    self._halt(
+                        reason="broker exception with halt_on_error enabled",
+                        event_type="broker_error",
+                        payload={"error": str(exc), "signal": signal, "intent": intent},
+                        error_summary=str(exc),
+                    )
+                    return None
+                if self.config.mode == "live":
+                    return None
+                raise
+
+        if result.status in {"REJECTED", "CANCELED"} and reserved_notional > 0 and self.budget_guard is not None:
+            self.budget_guard.release(order_notional=reserved_notional)
 
         self._save_order(bar, signal, req, result)
 
@@ -798,6 +1546,29 @@ class RuntimeEngine:
             self._notify(
                 f"[{self.config.mode}] fill {side} qty={result.filled_qty:.6f} price={result.avg_price:.4f} signal={signal}"
             )
+        elif (
+            self.config.mode == "live"
+            and str(req.order_type).upper() in {"MARKET", "LIMIT"}
+            and result.status in {"REJECTED", "CANCELED"}
+            and ("-4164" in str(result.message) or "notional" in str(result.message).lower())
+        ):
+            self._rejected_by_min_notional_count += 1
+            self._last_order_block_reason = "entry_notional_too_small"
+            self._event(
+                "entry_notional_too_small",
+                {
+                    "signal": signal,
+                    "intent": intent,
+                    "error": str(result.message),
+                    "attempted_notional": order_notional,
+                    "final_notional": order_notional,
+                    "min_notional": float(self._get_symbol_order_constraints().get("min_notional", 0.0)),
+                    "qty_before_round": requested_qty,
+                    "qty_after_round": requested_qty,
+                    "skip_reason": "broker_result_rejected_min_notional",
+                },
+            )
+            return None
         elif self.config.mode == "live" and str(req.order_type).upper() in {"MARKET", "LIMIT"}:
             self._halt(
                 reason=f"live order failed: {result.status}",
@@ -840,7 +1611,7 @@ class RuntimeEngine:
             self._cancel_open_order(bar=bar, order_id=oid, reason=reason)
         self._protective_pair = {}
 
-    def _maybe_create_protective_orders(self, *, bar: LiveBar) -> None:
+    def _maybe_create_protective_orders(self, *, bar: LiveBar, fail_on_missing: bool = True) -> None:
         if not self.config.enable_protective_orders:
             return
         mark = max(float(self.position_entry_price), float(bar.close), 1e-9)
@@ -851,6 +1622,9 @@ class RuntimeEngine:
         side = self._position_side()
         qty = abs(self.position_qty)
         if qty <= 0:
+            return
+        required = self._required_protective_kinds()
+        if not required:
             return
 
         sl_order_id: str | None = None
@@ -919,6 +1693,18 @@ class RuntimeEngine:
                 bar=bar,
                 price_source="bar_close",
                 fill_price=None,
+            )
+        current = {
+            str(meta.get("kind", "")).lower()
+            for meta in self._open_orders.values()
+            if isinstance(meta, dict)
+        }
+        missing = sorted(required - current)
+        if missing and fail_on_missing:
+            self._handle_protective_failure(
+                bar=bar,
+                reason="entry protective creation failed",
+                missing=missing,
             )
 
     def _maybe_update_trailing_stop(self, *, bar: LiveBar) -> None:
@@ -1090,13 +1876,19 @@ class RuntimeEngine:
     def _status_line(self, bar: LiveBar) -> str:
         equity = self._equity(bar.close)
         unrealized = self.position_qty * (bar.close - self.position_entry_price) if self.position_qty != 0 else 0.0
-        budget = self.risk_guard.budget_usdt(equity=equity)
         exposure = abs(self.position_qty) * bar.close
+        budget_snapshot = self._account_budget_snapshot(bar_ts=pd.to_datetime(bar.timestamp, utc=True))
+        account_available = float(budget_snapshot.get("account_available_usdt", 0.0))
+        budget_cap, _, _ = self._resolve_budget_cap(
+            equity=equity,
+            current_exposure_notional=exposure,
+            account_available_usdt=account_available,
+        )
         return (
-            f"ts={bar.timestamp} symbol={self.config.symbol} side={self._position_side()} qty={abs(self.position_qty):.6f} "
+            f"ts={bar.timestamp} symbol={self.config.symbol} broker={self._broker_label()} side={self._position_side()} qty={abs(self.position_qty):.6f} "
             f"entry={self.position_entry_price:.4f} unrealized={unrealized:.2f} "
             f"realized={self.realized_pnl:.2f} equity={equity:.2f} signal={self.last_signal} "
-            f"budget={budget:.2f} exposure={exposure:.2f} "
+            f"budget_cap={budget_cap:.2f} exposure={exposure:.2f} "
             f"open_protective={len(self._open_orders)} halted={self.halted}"
         )
 
@@ -1143,6 +1935,17 @@ class RuntimeEngine:
             self._processed_bars = int(risk_state.get("processed_bars", 0))
             self._halt_reason = str(risk_state.get("halt_reason", ""))
             self._consecutive_losses = int(risk_state.get("consecutive_losses", 0))
+            self._last_order_block_reason = str(risk_state.get("last_order_block_reason", self._last_order_block_reason))
+            self._rejected_by_min_notional_count = int(
+                risk_state.get("rejected_by_min_notional_count", self._rejected_by_min_notional_count)
+            )
+            self._protective_fail_count = int(risk_state.get("protective_fail_count", self._protective_fail_count))
+            self._min_entry_notional_block_count = int(
+                risk_state.get("min_entry_notional_block_count", self._min_entry_notional_block_count)
+            )
+            restored_samples = risk_state.get("min_entry_notional_block_samples", self._min_entry_notional_samples)
+            if isinstance(restored_samples, list):
+                self._min_entry_notional_samples = [s for s in restored_samples if isinstance(s, dict)][-5:]
         loaded_open_orders = resume_state.get("open_orders") or {}
         if (
             isinstance(loaded_open_orders, dict)
@@ -1191,6 +1994,17 @@ class RuntimeEngine:
     def _risk_state_payload(self, *, mark_price: float) -> dict[str, Any]:
         equity = self._equity(mark_price)
         drawdown = ((self.peak_equity - equity) / self.peak_equity) if self.peak_equity > 0 else 0.0
+        current_exposure_notional = abs(self.position_qty) * mark_price
+        snap_ts = pd.to_datetime(self._bars[-1].timestamp, utc=True) if self._bars else pd.Timestamp.now(tz="UTC")
+        budget_snapshot = self._account_budget_snapshot(bar_ts=snap_ts)
+        account_available_usdt = float(budget_snapshot.get("account_available_usdt", 0.0))
+        account_total_usdt = float(budget_snapshot.get("account_total_usdt", 0.0))
+        account_source = str(budget_snapshot.get("source", "unavailable"))
+        budget_cap_usdt, budget_cap_remaining_usdt, budget_cap_source = self._resolve_budget_cap(
+            equity=equity,
+            current_exposure_notional=current_exposure_notional,
+            account_available_usdt=account_available_usdt,
+        )
         return {
             "realized_pnl": self.realized_pnl,
             "fees_paid": self.fees_paid,
@@ -1202,19 +2016,30 @@ class RuntimeEngine:
             "halt_reason": self._halt_reason,
             "equity": equity,
             "drawdown_pct": drawdown,
-            "budget_usdt": self.risk_guard.budget_usdt(equity=equity),
+            "broker": self._broker_label(),
+            "budget_cap_usdt": budget_cap_usdt,
+            "budget_usdt": budget_cap_usdt,
+            "budget_cap_remaining_usdt": budget_cap_remaining_usdt,
+            "budget_cap_source": budget_cap_source,
             "allocation_pct": self.config.account_allocation_pct,
-            "current_exposure_notional": abs(self.position_qty) * mark_price,
+            "current_exposure_notional": current_exposure_notional,
             "daily_loss_limit_pct": self.config.daily_loss_limit_pct,
             "daily_loss_limit_usdt": self.risk_guard.daily_loss_limit_usdt(equity=equity),
             "daily_loss_remaining_usdt": self.risk_guard.remaining_daily_loss_usdt(
                 equity=equity,
                 realized_pnl_today=self.realized_pnl,
             ),
+            "max_position_notional": self.config.max_position_notional_usdt,
+            "min_entry_notional": self.config.min_entry_notional_usdt,
+            "min_entry_notional_usdt": self.config.min_entry_notional_usdt,
+            "account_available_usdt": account_available_usdt,
+            "account_total_usdt": account_total_usdt,
+            "account_balance_source": account_source,
             "max_drawdown_pct_limit": self.risk_guard.max_drawdown_pct,
             "max_position_notional_usdt": self.config.max_position_notional_usdt,
             "env": self.config.binance_env,
             "live_trading": self.config.live_trading_enabled,
+            "budget_guard": self.config.budget_guard_enabled,
             "dry_run": self.config.dry_run,
             "preset": self.config.preset_name,
             "sleep_mode": self.config.sleep_mode_enabled,
@@ -1222,6 +2047,11 @@ class RuntimeEngine:
             "quiet_hours_active": self.risk_guard.quiet_hours_active(),
             "consecutive_losses": self._consecutive_losses,
             "consecutive_loss_limit": self.config.consec_loss_limit,
+            "last_order_block_reason": self._last_order_block_reason,
+            "rejected_by_min_notional_count": self._rejected_by_min_notional_count,
+            "protective_fail_count": self._protective_fail_count,
+            "min_entry_notional_block_count": self._min_entry_notional_block_count,
+            "min_entry_notional_block_samples": list(self._min_entry_notional_samples),
         }
 
     def _maybe_send_heartbeat(self, *, bar: LiveBar) -> None:
@@ -1266,6 +2096,37 @@ class RuntimeEngine:
             for oid, meta in self._open_orders.items()
             if isinstance(meta, dict) and isinstance(meta.get("request"), OrderRequest)
         }
+        if self.config.mode == "live":
+            get_open_orders = getattr(self.broker, "get_open_orders", None)
+            if callable(get_open_orders):
+                broker_open: dict[str, Any] = {}
+                try:
+                    maybe = get_open_orders(symbol=self.config.symbol)
+                    if isinstance(maybe, dict):
+                        broker_open = maybe
+                except TypeError:
+                    try:
+                        maybe = get_open_orders(self.config.symbol)
+                        if isinstance(maybe, dict):
+                            broker_open = maybe
+                    except Exception:
+                        broker_open = {}
+                except Exception:
+                    broker_open = {}
+                for oid, payload in broker_open.items():
+                    key = str(oid)
+                    if key in open_orders_payload or not isinstance(payload, dict):
+                        continue
+                    open_orders_payload[key] = {
+                        "order_id": key,
+                        "symbol": str(payload.get("symbol", self.config.symbol)),
+                        "side": str(payload.get("side", "")),
+                        "order_type": str(payload.get("order_type", payload.get("type", ""))),
+                        "qty": float(payload.get("qty", payload.get("amount", 0.0)) or 0.0),
+                        "stop_price": payload.get("stop_price", payload.get("stopPrice")),
+                        "reduce_only": bool(payload.get("reduce_only", False)),
+                        "client_order_id": payload.get("client_order_id"),
+                    }
         if self._protective_pair:
             open_orders_payload["_pair"] = dict(self._protective_pair)
         broker_snapshot = getattr(self.broker, "get_state_snapshot", None)
@@ -1356,6 +2217,10 @@ class RuntimeEngine:
 
             if hasattr(self.broker, "update_market_price"):
                 self.broker.update_market_price(self.config.symbol, bar.close)  # type: ignore[attr-defined]
+            if self.config.mode == "live":
+                snapshot = self._fetch_live_position_snapshot()
+                if snapshot is not None:
+                    self._apply_live_position_snapshot(bar=bar, snapshot=snapshot, source="bar_sync")
 
             self._handle_trigger_fills_from_broker(bar=bar)
             if self._position_side() == "flat" and self._open_orders:

@@ -1,5 +1,159 @@
 ﻿# Experiment Log
 
+## 2026-03-10 - 12h Live-Forward Execution Template
+
+### Run Command (1 line)
+- `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_12h.ps1`
+
+### Start / End Template
+- start_utc:
+- end_utc:
+- duration_minutes:
+- run_id:
+- out_dir:
+- summary_json:
+
+### Summary Decision Criteria
+- PASS:
+  - `halted=false`
+  - `symbols_halted=0`
+  - no `protective_orders_not_2_for_open_positions`
+- WARNING:
+  - `trades=0` (stability pass 가능, 거래 없음)
+- FAIL:
+  - `halted=true` or `symbols_halted>0`
+  - open position exists without 2 protective orders
+  - repeated min-size issues without meaningful order attempts (`rejected_by_min_notional_count` 과다)
+
+## 2026-03-08 - Live Testnet Budget Guard and Demo-Visible Order Path
+
+### Scope
+- changed area: runtime/broker/cli safety and execution path (no strategy lever change)
+- goals:
+  - make live-forward testnet runs visible in demo futures UI
+  - enforce pre-order available-balance budget checks
+  - keep protective-order flow intact under sufficient budget
+
+### Implementation
+- added testnet-only enforcement for `run --mode live`
+- added pre-order account budget guard (default ON)
+- added `insufficient_budget` event path when entry order is skipped
+- added shared budget guard support for multi-symbol account-level consistency
+
+### Verification Gates
+- `uv run --active pytest -q`
+- `uv run --active trader doctor --env testnet`
+
+### Gate Results (2026-03-08)
+- `pytest -q`: PASS (`22 passed`)
+- `doctor --env testnet`: PASS (credentials/source diagnostics + auth/time/symbol checks all green)
+- negative doctor check (intentionally bad key/secret): FAIL with clear `-2014` message and remediation hint table
+
+### Demo Run Commands
+- 1 symbol, 10 minutes:
+  - `uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT --timeframe 1m --strategy ema_cross --max-bars 10 --halt-on-error --yes-i-understand-live-risk`
+- 3 symbols, 60 minutes:
+  - `uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT,ETH/USDT,BNB/USDT --timeframe 1m --strategy ema_cross --max-bars 60 --halt-on-error --yes-i-understand-live-risk`
+
+### E2E Result Snapshot (2026-03-08)
+- key incident root cause on this machine: process env overrides shadowed root `.env` (see `guide/INCIDENT_TESTNET_2014_2026-03-08.md`)
+- additional runtime alignment found:
+  - preflight fails if expected leverage mismatches account leverage (`expected=3`, account `live_leverage=20`)
+  - this machine/account requires `LEVERAGE=20` (or exchange-side leverage reset to 3)
+- real testnet live-forward evidence:
+  - `run_id=91471b8aa4e74d578cbd9add56580e8d`
+  - command env used: `LIVE_TRADING=true`, `LEVERAGE=20`, `--env testnet`
+  - orders recorded in DB:
+    - `BNB/USDT` `SELL MARKET` `filled` + `BUY STOP_MARKET/TAKE_PROFIT_MARKET` `new`
+    - `ETH/USDT` `SELL MARKET` `filled` + `BUY STOP_MARKET/TAKE_PROFIT_MARKET` `new`
+  - fills recorded in DB for both symbols
+  - runtime log includes `open_protective=2` while position is open
+
+### 2h Wall-Clock Durability Attempt (2026-03-08 UTC)
+- target profile:
+  - mode: `live`
+  - env: `testnet`
+  - data: `websocket`
+  - symbols: `BTC/USDT,ETH/USDT,BNB/USDT`
+  - bars: `120`
+  - realtime guard: `--realtime-only` (new CLI option, no bootstrap backfill)
+- codex session run artifact:
+  - out dir: `out/experiments/live_forward_2h_20260308_131442`
+  - runtime run_id: `5db848d01bec4045b4b74b153489decb`
+  - observed UTC window: `2026-03-08T13:14:42Z` ~ `2026-03-08T13:24:00Z` (about 9m 18s)
+  - status snapshots saved: `2` (`status_*.txt`, `status_final.txt`)
+  - halted: `False`
+  - orders/fills in this short window: `0/0` (all symbols `hold`)
+- note:
+  - this codex execution environment terminates long-running commands around ~10 minutes, so full 2h continuous wall-clock completion cannot be finalized inside one tool session.
+  - use `scripts/run_live_forward_2h.ps1` on a normal terminal to complete full 2h unattended run with 5-minute snapshots and summary output.
+
+### Demo UI Manual Checklist (for 2h run completion)
+- [ ] Positions: 3 symbols are visible and per-symbol position/entry price are separated correctly
+- [ ] Open Orders: per-position protective orders remain 2 (`SL/TP`) while position is open
+- [ ] Reverse flow: old `SL/TP` canceled, new `SL/TP` created
+- [ ] Assets: available balance changes are visible
+
+### Notes
+- live mode is restricted to testnet in this repo
+- if available balance is insufficient, order submission is skipped with reason `insufficient_budget`
+
+## 2026-03-08 - 6h Live-Forward Template (Pre-Execution)
+
+### Goal
+- run testnet futures live-forward for 6 wall-clock hours with websocket realtime bars only
+- store 5-minute status snapshots and final PASS/FAIL summary artifact
+
+### Command (1 line)
+- `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1`
+
+### Optional Overrides
+- symbols override:
+  - `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1 -Symbols "BTC/USDT,ETH/USDT,BNB/USDT,SOL/USDT"`
+- quick validation mode:
+  - `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1 -Hours 0.1 -MaxBars 5 -SnapshotEverySec 60`
+
+### Runtime Contract
+- hard fixed by script:
+  - process env override cleanup for Binance keys
+  - `--env testnet`
+  - `--data-mode websocket`
+  - `--realtime-only`
+  - doctor gate must PASS before runtime start
+- defaults:
+  - `LIVE_TRADING=true`
+  - `LEVERAGE=20`
+  - `Hours=6` -> `max-bars=360`
+
+### Artifact Layout
+- output root: `out/experiments/live_forward_6h_<timestamp>/`
+- files:
+  - `doctor_preflight.txt`
+  - `run_stdout.log`
+  - `run_stderr.log`
+  - `status_snapshots/status_*.txt` (every 5 minutes)
+  - `status_final.txt`
+  - `summary.json`
+  - `trader.log`
+
+### PASS / FAIL Rule
+- PASS:
+  - `halted=false`
+  - `symbols_halted=0`
+  - each symbol with open position keeps protective `open_orders=2`
+- WARNING only:
+  - `trades=0` (stability PASS 가능, 거래 없음 경고)
+- FAIL:
+  - any halt
+  - any symbol halted
+  - any open-position symbol with protective order count not equal to 2
+
+### Demo UI Manual Checklist
+- [ ] Positions: per-symbol position/entry price separation
+- [ ] Open Orders: open position symbols keep SL/TP 2 orders
+- [ ] Reverse: old SL/TP cancel + new SL/TP create
+- [ ] Assets: available balance change visible
+
 ## 2026-03-05 - Shock Cooldown A/B (48 vs 36)
 
 ### Scope
@@ -502,4 +656,6 @@
 
 ### Next Lever (1 only)
 - Introduce `Extreme regime no-trade` gating as the next single-lever improvement.
+
+
 

@@ -437,5 +437,13 @@ class PaperBroker(Broker):
             balance[f"position_avg:{symbol}"] = pos.avg_entry_price
         return balance
 
+    def get_account_budget_snapshot(self, *, quote_asset: str = "USDT") -> dict[str, float | str]:
+        return {
+            "asset": str(quote_asset).upper(),
+            "available_balance": float(self.cash),
+            "total_balance": float(self.cash),
+            "source": "paper.cash",
+        }
+
     def get_position(self, symbol: str) -> PaperPosition:
         return self.positions.get(symbol, PaperPosition())

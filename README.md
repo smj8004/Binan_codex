@@ -48,6 +48,7 @@ Core live/runtime env:
 
 ```env
 LIVE_TRADING=false
+BUDGET_GUARD_ENABLED=true
 BINANCE_ENV=testnet
 USE_USER_STREAM=true
 LISTENKEY_RENEW_SECS=1800
@@ -292,6 +293,8 @@ Candidate definitions:
 
 ## Live Runtime (Safety First)
 
+Live runtime is restricted to `testnet` only in this repo. Mainnet live execution is rejected.
+
 Live mode requires explicit flag:
 
 ```bash
@@ -308,10 +311,10 @@ uv run trader run --mode live --dry-run --symbol BTC/USDT --timeframe 1m \
   --yes-i-understand-live-risk
 ```
 
-硫???щ낵 ?쒕씪?대윴:
+Multi-symbol example:
 
 ```powershell
-$env:BINANCE_ENV="mainnet"
+$env:BINANCE_ENV="testnet"
 $env:LIVE_TRADING="true"
 uv run --active trader run --mode live --dry-run --data-mode websocket --symbols BTC/USDT,ETH/USDT --timeframe 1m --strategy ema_cross --yes-i-understand-live-risk
 ```
@@ -330,6 +333,52 @@ uv run trader run --mode live --halt-on-error --symbol BTC/USDT --timeframe 1m -
 uv run trader run --mode live --one-shot --symbol BTC/USDT --timeframe 1m --yes-i-understand-live-risk
 uv run trader run --mode live --resume --resume-run-id <id> --symbol BTC/USDT --timeframe 1m --yes-i-understand-live-risk
 ```
+
+Live-forward demo run (UI verification):
+
+```bash
+# 1 symbol, 10 minutes
+uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT --timeframe 1m --strategy ema_cross --max-bars 10 --halt-on-error --yes-i-understand-live-risk
+
+# 3 symbols, 60 minutes
+uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT,ETH/USDT,BNB/USDT --timeframe 1m --strategy ema_cross --max-bars 60 --halt-on-error --yes-i-understand-live-risk
+```
+
+Notes:
+- To actually submit orders (and see Positions/Open Orders in Demo UI), set `LIVE_TRADING=true`.
+- Keep `--env testnet` (demo-fapi only). Mainnet live is not allowed for this flow.
+- Preflight requires leverage alignment (`LEVERAGE` in config/environment must match account leverage on testnet).
+
+2-hour wall-clock durability runner (with 5-minute status snapshots):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_2h.ps1
+```
+
+6-hour wall-clock durability runner (with 5-minute status snapshots + PASS/FAIL summary):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1
+```
+
+12-hour wall-clock durability runner (1-line):
+- `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_12h.ps1`
+
+## Live Entry Sizing Guard (Cap + Floor)
+
+- `max_position_notional_usdt` default: `4000.0`
+- `min_entry_notional_usdt` default: `250.0`
+- Reduce-only orders are excluded from the floor check.
+- The floor check applies only to `reduce_only=False` entries.
+
+Runtime CLI overrides:
+
+```bash
+uv run --active trader run --max-position-notional 4000 --min-entry-notional 250
+```
+
+Detailed definition and event/diagnostics behavior:
+- `docs/live_entry_sizing_guard.md`
 
 ## Sleep Mode ?댁쁺 媛?대뱶
 
@@ -402,6 +451,67 @@ uv run trader doctor --env mainnet
 - account authentication
 - server time sync
 - symbol filters
+
+### Doctor -2014 Recovery (Testnet)
+
+Use this exact sequence when `doctor --env testnet` fails with `-2014 key format invalid`.
+
+1. Verify which credential source is actually loaded (masked output only):
+
+```bash
+uv run --active trader doctor --env testnet
+```
+
+Check these rows in doctor diagnostics:
+- `key_source`
+- `key_source_origin` (`process_env` or `merged_defaults`)
+- `key_len`
+- `key_prefix`
+- `secret_len`
+- `has_whitespace`
+- `contains_newline`
+- `looks_like_hmac`
+- `env_file_used`
+
+2. Lock `.env` loading path to project root:
+
+```powershell
+pwd
+$env:ENV_FILE=""
+Remove-Item Env:BINANCE_TESTNET_API_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:BINANCE_TESTNET_API_SECRET -ErrorAction SilentlyContinue
+uv run --active trader doctor --env testnet
+```
+
+Run from repository root so `env_file_used` points to root `.env`.
+If `key_source_origin=process_env`, process-level variables are overriding file values.
+If you intentionally use another file, set explicit path:
+
+```powershell
+$env:ENV_FILE="C:\path\to\Binance_codex\.env"
+uv run --active trader doctor --env testnet
+```
+
+3. Normalize key lines (no quotes, no trailing spaces):
+
+```env
+BINANCE_TESTNET_API_KEY=xxxx
+BINANCE_TESTNET_API_SECRET=yyyy
+```
+
+Do not use:
+- quoted values (`"xxxx"` or `'xxxx'`)
+- leading/trailing spaces
+- multi-line values
+
+4. Optional PowerShell encoding cleanup (remove BOM and CRLF artifacts):
+
+```powershell
+Copy-Item .env .env.bak -Force
+$raw = Get-Content .env -Raw
+$raw = $raw -replace "`r",""
+[System.IO.File]::WriteAllText((Resolve-Path .env), $raw, (New-Object System.Text.UTF8Encoding($false)))
+```
 
 ## Status Command
 

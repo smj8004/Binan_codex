@@ -1,5 +1,35 @@
 # Baseline State
 
+## 2026-03-08 - Live Testnet Runtime Safety Baseline
+
+- scope: operational runtime hardening (not strategy parameter tuning)
+- enforcement:
+  - live execution is testnet-only (`--mode live` with non-testnet env is rejected)
+  - pre-order account budget guard defaults to ON (`BUDGET_GUARD_ENABLED=true`)
+- expected behavior:
+  - on insufficient available balance, entry order is skipped
+  - reason `insufficient_budget` is recorded in events/runtime state
+  - protective reduce-only orders remain in normal flow when budget is sufficient
+- gate snapshot (2026-03-08):
+  - `uv run --active pytest -q` -> PASS (`22 passed`)
+  - `uv run --active trader doctor --env testnet` -> PASS (masked diagnostics show `key_source_origin=merged_defaults`)
+  - negative doctor check with injected bad key/secret -> FAIL with clear `-2014` hint and `key_source_origin=process_env`
+- live-forward evidence (testnet/demo only):
+  - `run_id=91471b8aa4e74d578cbd9add56580e8d` (3 symbols, 60 bars, `LIVE_TRADING=true`, `LEVERAGE=20`)
+  - DB orders/fills confirm real submissions:
+    - `BNB/USDT` market short `filled` + `STOP_MARKET`/`TAKE_PROFIT_MARKET` protective orders `new`
+    - `ETH/USDT` market short `filled` + `STOP_MARKET`/`TAKE_PROFIT_MARKET` protective orders `new`
+  - runtime logs show `open_protective=2` after entries
+- demo UI validation commands:
+  - `uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT --timeframe 1m --strategy ema_cross --max-bars 10 --halt-on-error --yes-i-understand-live-risk`
+  - `uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT,ETH/USDT,BNB/USDT --timeframe 1m --strategy ema_cross --max-bars 60 --halt-on-error --yes-i-understand-live-risk`
+  - account alignment required on this machine: set `LEVERAGE=20` (or adjust exchange-side leverage to match config)
+  - real order submission required for UI visibility: set `LIVE_TRADING=true`
+  - note: testnet/demo only, mainnet live is blocked by runtime CLI guard
+- 2h wall-clock baseline status:
+  - codex in-session attempt (`run_id=5db848d01bec4045b4b74b153489decb`) recorded only ~9 minutes due environment runtime cap (~10 minutes per long command)
+  - full 2h unattended verification should be executed via `scripts/run_live_forward_2h.ps1` on a normal terminal
+
 ## Last Updated
 - date: 2026-03-05
 - experiment: shock cooldown bars A/B (`48` vs `36`) with all other fixed values unchanged

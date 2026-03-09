@@ -41,7 +41,7 @@ from trader.optimize import (
     select_parameter_sets,
 )
 from trader.storage import SQLiteStorage
-from trader.runtime import RuntimeConfig, RuntimeEngine, RuntimeOrchestrator
+from trader.runtime import AccountBudgetGuard, RuntimeConfig, RuntimeEngine, RuntimeOrchestrator
 from trader.risk.guards import RiskGuard
 from trader.strategy.base import Bar, Strategy
 from trader.strategy.bollinger import BollingerBandStrategy
@@ -116,6 +116,9 @@ def _print_runtime_banner(*, cfg: AppConfig, runtime_cfg: RuntimeConfig) -> None
     table.add_row("mode", str(runtime_cfg.mode))
     table.add_row("BINANCE_ENV", str(runtime_cfg.binance_env))
     table.add_row("LIVE_TRADING", str(runtime_cfg.live_trading_enabled))
+    table.add_row("budget_guard", str(runtime_cfg.budget_guard_enabled))
+    table.add_row("budget_usdt_mode", str(runtime_cfg.budget_usdt_mode))
+    table.add_row("budget_usdt_fixed", str(runtime_cfg.budget_usdt_fixed if runtime_cfg.budget_usdt_fixed is not None else "-"))
     table.add_row("dry_run", str(runtime_cfg.dry_run))
     table.add_row("preset", str(runtime_cfg.preset_name or "-"))
     table.add_row("sleep_mode", str(runtime_cfg.sleep_mode_enabled))
@@ -125,6 +128,7 @@ def _print_runtime_banner(*, cfg: AppConfig, runtime_cfg: RuntimeConfig) -> None
     table.add_row("max_dd", _pct_text(cfg.max_drawdown_pct))
     table.add_row("risk_per_trade", _pct_text(runtime_cfg.risk_per_trade_pct))
     table.add_row("max_position_notional", f"{runtime_cfg.max_position_notional_usdt:.2f} USDT")
+    table.add_row("min_entry_notional", f"{runtime_cfg.min_entry_notional_usdt:.2f} USDT")
     table.add_row("protective_mode", str(runtime_cfg.protective_missing_policy))
     table.add_row(
         "sl/tp",
@@ -908,8 +912,18 @@ def run(
     params_from: str | None = typer.Option(None, help="csv/parquet path or run_id source"),
     params_rank: int = typer.Option(1, min=1, help="Rank to select from params file"),
     max_bars: int = typer.Option(0, min=0, help="Stop after N closed bars (0 = infinite)"),
+    realtime_only: bool = typer.Option(
+        False,
+        "--realtime-only",
+        help="Websocket mode only: disable historical backfill and process live bars only",
+    ),
     poll_interval_sec: float | None = typer.Option(None, min=0.1, help="REST polling interval"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Log order payload only, do not send"),
+    budget_guard: bool | None = typer.Option(
+        None,
+        "--budget-guard/--no-budget-guard",
+        help="Pre-order available-balance check (default from config)",
+    ),
     one_shot: bool = typer.Option(False, "--one-shot", help="Process one closed bar then exit"),
     halt_on_error: bool = typer.Option(False, "--halt-on-error", help="Halt immediately on runtime exception"),
     resume: bool = typer.Option(False, "--resume", help="Resume from saved runtime_state"),
@@ -923,6 +937,23 @@ def run(
     auto_protective: bool = typer.Option(True, "--auto-protective/--no-auto-protective", help="Auto-create SL/TP orders after entry"),
     run_stop_loss_pct: float | None = typer.Option(None, min=0.0, help="Protective stop loss pct"),
     run_take_profit_pct: float | None = typer.Option(None, min=0.0, help="Protective take profit pct"),
+    budget_usdt: str | None = typer.Option(
+        None,
+        "--budget-usdt",
+        help="Budget cap in USDT: numeric value or 'auto'",
+    ),
+    max_position_notional: float | None = typer.Option(
+        None,
+        "--max-position-notional",
+        min=1.0,
+        help="Max position exposure cap in USDT",
+    ),
+    min_entry_notional: float | None = typer.Option(
+        None,
+        "--min-entry-notional",
+        min=0.0,
+        help="Minimum entry notional floor in USDT (reduce-only excluded)",
+    ),
     capital: float | None = typer.Option(None, "--capital", min=1.0, help="Optional fixed budget cap (USDT)"),
     yes_i_understand_live_risk: bool = typer.Option(
         False,
@@ -938,13 +969,19 @@ def run(
         raise typer.BadParameter("--yes-i-understand-live-risk is required for live mode")
     if env is not None and env.strip().lower() not in {"mainnet", "testnet"}:
         raise typer.BadParameter("--env must be one of: mainnet, testnet")
+    if budget_usdt is not None and capital is not None:
+        raise typer.BadParameter("Use either --budget-usdt or --capital, not both")
 
     parsed_symbols = _parse_symbols(symbols) if symbols else [symbol]
     primary_symbol = parsed_symbols[0]
 
     setup_logging()
     selected_preset = "sleep_mode" if sleep_mode else preset
-    cfg = AppConfig.from_env(preset=selected_preset).model_copy(update={"symbol": primary_symbol, "timeframe": timeframe})
+    env_override = env.strip().lower() if env is not None else None
+    cfg = AppConfig.from_env(
+        preset=selected_preset,
+        binance_env_override=(env_override if env_override in {"mainnet", "testnet"} else None),  # type: ignore[arg-type]
+    ).model_copy(update={"symbol": primary_symbol, "timeframe": timeframe})
     update_payload: dict[str, Any] = {"sleep_mode": sleep_mode}
     if env is not None:
         env_norm = env.strip().lower()
@@ -952,8 +989,15 @@ def run(
         update_payload["binance_testnet"] = env_norm == "testnet"
     if capital is not None:
         update_payload["capital_limit_usdt"] = float(capital)
+    if max_position_notional is not None:
+        update_payload["max_position_notional_usdt"] = float(max_position_notional)
+    if min_entry_notional is not None:
+        update_payload["min_entry_notional_usdt"] = float(min_entry_notional)
     cfg = cfg.model_copy(update=update_payload)
+    if mode == "live" and cfg.binance_env != "testnet":
+        raise typer.BadParameter("live mode is restricted to testnet only; use --env testnet")
     storage = SQLiteStorage(cfg.db_path)
+    effective_budget_guard = cfg.budget_guard_enabled if budget_guard is None else bool(budget_guard)
 
     loaded_params, loaded_strategy = _load_strategy_params_from_source(
         params_from=params_from,
@@ -981,6 +1025,28 @@ def run(
             else cfg.run_take_profit_pct
         )
     )
+
+    budget_mode = str(cfg.budget_usdt_mode or "risk").lower()
+    budget_fixed = float(cfg.budget_usdt_value or 0.0) if cfg.budget_usdt_value is not None else None
+    if budget_usdt is not None:
+        budget_raw = str(budget_usdt).strip().lower()
+        if budget_raw == "auto":
+            budget_mode = "auto"
+            budget_fixed = None
+        else:
+            try:
+                parsed_budget = float(budget_raw)
+            except ValueError as exc:
+                raise typer.BadParameter("--budget-usdt must be a number or 'auto'") from exc
+            if parsed_budget <= 0:
+                raise typer.BadParameter("--budget-usdt numeric value must be > 0")
+            budget_mode = "fixed"
+            budget_fixed = parsed_budget
+    elif capital is not None:
+        budget_mode = "fixed"
+        budget_fixed = float(capital)
+    elif mode == "live" and cfg.binance_env == "testnet" and budget_mode == "risk":
+        budget_mode = "auto"
 
     runtime_cfg = RuntimeConfig(
         mode=mode,  # type: ignore[arg-type]
@@ -1022,10 +1088,14 @@ def run(
         protective_take_profit_pct=effective_tp_pct,
         binance_env=cfg.binance_env,
         live_trading_enabled=cfg.live_trading,
+        budget_guard_enabled=effective_budget_guard,
+        budget_usdt_mode=(budget_mode if budget_mode in {"risk", "auto", "fixed"} else "risk"),  # type: ignore[arg-type]
+        budget_usdt_fixed=budget_fixed,
         preset_name=cfg.preset_name,
         sleep_mode_enabled=sleep_mode,
         account_allocation_pct=cfg.account_allocation_pct,
         max_position_notional_usdt=cfg.max_position_notional_usdt,
+        min_entry_notional_usdt=cfg.min_entry_notional_usdt,
         risk_per_trade_pct=cfg.risk_per_trade_pct,
         daily_loss_limit_pct=cfg.daily_loss_limit_pct,
         capital_limit_usdt=cfg.capital_limit_usdt,
@@ -1084,17 +1154,23 @@ def run(
     feeds: dict[str, BinanceLiveFeed] = {}
     engines: dict[str, RuntimeEngine] = {}
     shared_run_id = uuid4().hex
+    shared_budget_guard: AccountBudgetGuard | None = None
+    if mode == "live" and runtime_cfg.budget_guard_enabled:
+        shared_budget_guard = AccountBudgetGuard(broker=broker)
     try:
         for sym in parsed_symbols:
             per_cfg = replace(runtime_cfg, symbol=sym)
             per_strategy = _build_strategy(strategy_name=strategy_name, params=loaded_params, cfg=cfg)
+            bootstrap_bars = 0
+            if data_mode == "websocket" and not realtime_only and max_bars > 0:
+                bootstrap_bars = max_bars
             per_feed = BinanceLiveFeed(
                 symbol=sym,
                 timeframe=timeframe,
                 mode=data_mode,
                 poll_interval_sec=poll_interval_sec or cfg.run_poll_interval_sec,
                 testnet=_is_testnet(cfg),
-                bootstrap_history_bars=(max_bars if (data_mode == "websocket" and max_bars > 0) else 0),
+                bootstrap_history_bars=bootstrap_bars,
             )
             feeds[sym] = per_feed
             engines[sym] = RuntimeEngine(
@@ -1104,6 +1180,7 @@ def run(
                 feed=per_feed,
                 storage=storage,
                 risk_guard=risk_guard,
+                budget_guard=shared_budget_guard,
                 notifier=notifier,
                 initial_equity=cfg.initial_equity,
                 run_id=shared_run_id,
@@ -1135,11 +1212,15 @@ def arm_sleep(
     env: str | None = typer.Option(None, "--env", help="mainnet | testnet"),
 ) -> None:
     setup_logging()
-    cfg = AppConfig.from_env(preset=preset)
+    env_override = env.strip().lower() if env is not None else None
+    if env_override is not None and env_override not in {"mainnet", "testnet"}:
+        raise typer.BadParameter("--env must be one of: mainnet, testnet")
+    cfg = AppConfig.from_env(
+        preset=preset,
+        binance_env_override=env_override,  # type: ignore[arg-type]
+    )
     if env is not None:
         env_norm = env.strip().lower()
-        if env_norm not in {"mainnet", "testnet"}:
-            raise typer.BadParameter("--env must be one of: mainnet, testnet")
         cfg = cfg.model_copy(update={"binance_env": env_norm, "binance_testnet": env_norm == "testnet"})
 
     checklist = Table(title="Sleep Mode Checklist")
@@ -1179,9 +1260,37 @@ def doctor(
         raise typer.BadParameter("--env must be one of: mainnet, testnet")
 
     setup_logging()
-    cfg = AppConfig.from_env()
+    cfg = AppConfig.from_env(binance_env_override=requested_env)  # type: ignore[arg-type]
     target_symbol = symbol or cfg.symbol
     is_testnet = requested_env == "testnet"
+    has_whitespace = bool(cfg.binance_api_key_has_whitespace or cfg.binance_api_secret_has_whitespace)
+    contains_newline = bool(cfg.binance_api_key_contains_newline or cfg.binance_api_secret_contains_newline)
+
+    diag = Table(title=f"Doctor ({requested_env}) - key diagnostics (masked)")
+    diag.add_column("item")
+    diag.add_column("value")
+    diag.add_row("env", requested_env)
+    diag.add_row("cwd", str(Path.cwd()))
+    diag.add_row("env_file_used", str(cfg.env_file_used or "-"))
+    diag.add_row("key_source", str(cfg.binance_api_key_source))
+    diag.add_row("key_source_origin", str(cfg.binance_api_key_source_origin))
+    diag.add_row("key_len", str(cfg.binance_api_key_len))
+    diag.add_row("key_prefix", str(cfg.binance_api_key_prefix or "-"))
+    diag.add_row("secret_source", str(cfg.binance_api_secret_source))
+    diag.add_row("secret_source_origin", str(cfg.binance_api_secret_source_origin))
+    diag.add_row("secret_len", str(cfg.binance_api_secret_len))
+    diag.add_row("has_whitespace", str(has_whitespace))
+    diag.add_row(
+        "has_whitespace(detail)",
+        f"key={cfg.binance_api_key_has_whitespace} secret={cfg.binance_api_secret_has_whitespace}",
+    )
+    diag.add_row("contains_newline", str(contains_newline))
+    diag.add_row(
+        "contains_newline(detail)",
+        f"key={cfg.binance_api_key_contains_newline} secret={cfg.binance_api_secret_contains_newline}",
+    )
+    diag.add_row("looks_like_hmac", str(cfg.binance_api_secret_looks_like_hmac))
+    console.print(diag)
 
     broker = LiveBinanceBroker(
         api_key=cfg.binance_api_key.get_secret_value() if cfg.binance_api_key else "",
@@ -1190,6 +1299,8 @@ def doctor(
         live_trading=False,
         use_user_stream=False,
     )
+    balance_snapshot: dict[str, Any] | None = None
+    balance_snapshot_error = ""
     try:
         ok, checks = broker.preflight_check(
             symbol=target_symbol,
@@ -1198,8 +1309,42 @@ def doctor(
             expected_margin_mode=cfg.expected_margin_mode,
             include_leverage_margin=False,
         )
+        try:
+            raw_snapshot = broker.get_account_budget_snapshot(quote_asset="USDT")
+            if isinstance(raw_snapshot, dict):
+                balance_snapshot = raw_snapshot
+        except Exception as exc:
+            balance_snapshot_error = str(exc)
     finally:
         broker.close()
+
+    if balance_snapshot is not None:
+        account_total = float(balance_snapshot.get("account_total_usdt", balance_snapshot.get("total_balance", 0.0)) or 0.0)
+        account_available = float(
+            balance_snapshot.get("account_available_usdt", balance_snapshot.get("available_balance", 0.0)) or 0.0
+        )
+        endpoint_used = str(balance_snapshot.get("endpoint_used", "/fapi/v2/balance"))
+        checks.append(
+            {
+                "event_type": "preflight_balance",
+                "check": "futures_balance_snapshot",
+                "ok": True,
+                "detail": (
+                    f"account_total_usdt={account_total:.8f} "
+                    f"account_available_usdt={account_available:.8f} "
+                    f"endpoint_used={endpoint_used}"
+                ),
+            }
+        )
+    elif balance_snapshot_error:
+        checks.append(
+            {
+                "event_type": "preflight_balance",
+                "check": "futures_balance_snapshot",
+                "ok": False,
+                "detail": f"balance snapshot fetch failed: {balance_snapshot_error}",
+            }
+        )
 
     table = Table(title=f"Doctor ({requested_env}) - auth/time/symbol checks")
     table.add_column("event")
@@ -1241,6 +1386,21 @@ def doctor(
     console.print(table)
 
     if not ok:
+        has_2014 = any(
+            isinstance(row, dict)
+            and str(row.get("event_type", "")) == "preflight_endpoint"
+            and int(row.get("error_code", 0) or 0) == -2014
+            for row in checks
+        )
+        if has_2014:
+            hint = Table(title="Doctor Hint -2014 (key format invalid)")
+            hint.add_column("check")
+            hint.add_row("If key_source_origin=process_env, clear BINANCE_TESTNET_API_KEY/SECRET from shell")
+            hint.add_row("Confirm BINANCE_TESTNET_API_KEY / BINANCE_TESTNET_API_SECRET are used for --env testnet")
+            hint.add_row("Remove quotes/spaces/newlines from .env key lines")
+            hint.add_row("Ensure project root .env is loaded (run from repo root, or set ENV_FILE explicitly)")
+            hint.add_row("Re-issue testnet futures API key/secret if format still fails")
+            console.print(hint)
         console.print("[bold red]Doctor failed. Check endpoint/auth diagnostics above.[/bold red]")
         raise typer.Exit(code=1)
     console.print("[green]Doctor passed. No orders were sent.[/green]")
@@ -1430,6 +1590,8 @@ def live(
         raise typer.Exit(code=1)
 
     cfg = AppConfig.from_env()
+    if cfg.binance_env != "testnet":
+        raise typer.BadParameter("live command is restricted to testnet only; set BINANCE_ENV=testnet")
     if not cfg.binance_api_key or not cfg.binance_api_secret:
         console.print("[bold red]BINANCE_API_KEY / BINANCE_API_SECRET are required for live mode.[/bold red]")
         raise typer.Exit(code=1)
@@ -1503,9 +1665,20 @@ def status(
         overview.add_row("sleep_mode", str(risk_state.get("sleep_mode", False)))
         overview.add_row("env", str(risk_state.get("env", "-")))
         overview.add_row("live_trading", str(risk_state.get("live_trading", False)))
+        broker_name = str(risk_state.get("broker", "") or "")
+        if not broker_name and bool(risk_state.get("live_trading", False)):
+            broker_name = "live_binance"
+        overview.add_row("broker", broker_name or "-")
         overview.add_row("dry_run", str(risk_state.get("dry_run", False)))
+        overview.add_row("account_total_usdt", str(risk_state.get("account_total_usdt", "-")))
+        overview.add_row("account_available_usdt", str(risk_state.get("account_available_usdt", "-")))
+        overview.add_row("budget_cap_usdt", str(risk_state.get("budget_cap_usdt", risk_state.get("budget_usdt", "-"))))
+        overview.add_row("budget_cap_remaining_usdt", str(risk_state.get("budget_cap_remaining_usdt", "-")))
+        overview.add_row("budget_cap_source", str(risk_state.get("budget_cap_source", "-")))
         overview.add_row("budget_usdt", str(risk_state.get("budget_usdt", "-")))
         overview.add_row("allocation_pct", str(risk_state.get("allocation_pct", "-")))
+        overview.add_row("max_position_notional", str(risk_state.get("max_position_notional", risk_state.get("max_position_notional_usdt", "-"))))
+        overview.add_row("min_entry_notional", str(risk_state.get("min_entry_notional", risk_state.get("min_entry_notional_usdt", "-"))))
         overview.add_row("current_exposure_notional", str(risk_state.get("current_exposure_notional", "-")))
         overview.add_row("daily_loss_remaining_usdt", str(risk_state.get("daily_loss_remaining_usdt", "-")))
         overview.add_row("drawdown_pct", str(risk_state.get("drawdown_pct", "-")))
@@ -1515,6 +1688,9 @@ def status(
         overview.add_row("trades", str(summary.get("trades_count", 0)))
         overview.add_row("orders", str(summary.get("orders_count", 0)))
         overview.add_row("fills", str(summary.get("fills_count", 0)))
+        overview.add_row("rejected_by_min_notional", str(risk_state.get("rejected_by_min_notional_count", 0)))
+        overview.add_row("entry_below_floor_count", str(risk_state.get("min_entry_notional_block_count", 0)))
+        overview.add_row("protective_fail_count", str(risk_state.get("protective_fail_count", 0)))
         overview.add_row("net_pnl", f"{float(summary.get('trades_net_pnl', 0.0)):.4f}")
         console.print(overview)
 

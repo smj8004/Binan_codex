@@ -131,6 +131,7 @@ def test_multisymbol_entry_price_protective_and_bnb_bars(tmp_path) -> None:
                 symbol=sym,
                 timeframe="1m",
                 fixed_notional_usdt=100.0,
+                min_entry_notional_usdt=0.0,
                 max_bars=5,
                 halt_on_error=True,
                 enable_protective_orders=True,
