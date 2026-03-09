@@ -364,6 +364,9 @@ powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1
 12-hour wall-clock durability runner (1-line):
 - `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_12h.ps1`
 
+16-hour wall-clock durability runner (1-line):
+- `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_16h.ps1`
+
 ## Live Entry Sizing Guard (Cap + Floor)
 
 - `max_position_notional_usdt` default: `4000.0`
