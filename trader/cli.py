@@ -124,6 +124,7 @@ def _print_runtime_banner(*, cfg: AppConfig, runtime_cfg: RuntimeConfig) -> None
     table.add_row("sleep_mode", str(runtime_cfg.sleep_mode_enabled))
     table.add_row("allocation_pct", _pct_text(runtime_cfg.account_allocation_pct))
     table.add_row("leverage", str(cfg.leverage))
+    table.add_row("fixed_notional", f"{runtime_cfg.fixed_notional_usdt:.2f} USDT")
     table.add_row("daily_loss_limit", _pct_text(runtime_cfg.daily_loss_limit_pct))
     table.add_row("max_dd", _pct_text(cfg.max_drawdown_pct))
     table.add_row("risk_per_trade", _pct_text(runtime_cfg.risk_per_trade_pct))
@@ -138,6 +139,25 @@ def _print_runtime_banner(*, cfg: AppConfig, runtime_cfg: RuntimeConfig) -> None
         ),
     )
     console.print(table)
+
+
+def _validate_live_entry_sizing(runtime_cfg: RuntimeConfig) -> None:
+    if runtime_cfg.mode != "live":
+        return
+    min_entry_notional = max(float(runtime_cfg.min_entry_notional_usdt), 0.0)
+    if min_entry_notional <= 0:
+        return
+    fixed_notional = max(float(runtime_cfg.fixed_notional_usdt), 0.0)
+    if fixed_notional + 1e-9 >= min_entry_notional:
+        return
+    console.print(
+        (
+            "[yellow]Live entry sizing warning:[/yellow] "
+            f"fixed_notional_usdt={fixed_notional:.2f} < min_entry_notional_usdt={min_entry_notional:.2f}. "
+            "Runtime startup will continue, and entries below the floor will be skipped at order time "
+            "with entry_notional_below_floor diagnostics."
+        )
+    )
 
 
 def _sleep_mode_warnings(cfg: AppConfig) -> list[str]:
@@ -1112,6 +1132,7 @@ def run(
         heartbeat_enabled=cfg.heartbeat_enabled,
         heartbeat_interval_minutes=cfg.heartbeat_interval_minutes,
     )
+    _validate_live_entry_sizing(runtime_cfg)
     risk_guard = RiskGuard(
         max_order_notional=cfg.max_order_notional,
         max_position_notional=cfg.max_position_notional_usdt,

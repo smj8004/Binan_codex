@@ -12,6 +12,8 @@ This document defines the execution-path sizing constraints added without changi
 - Hard floor applies only to non-reduce-only entries (`reduce_only=False`).
 - Reduce-only orders (manual exits, SL/TP protective orders, emergency close) always bypass the floor.
 - Strategy entry/exit signal rules are unchanged.
+- `fixed_notional_usdt < min_entry_notional_usdt` does not block runtime startup.
+- In that case, the runtime still starts and the affected entry is skipped only at order time.
 
 ## Intent
 
@@ -35,3 +37,8 @@ When blocked by floor:
 - Diagnostics update:
   - `min_entry_notional_block_count`
   - `min_entry_notional_block_samples` (last 5)
+
+Startup behavior:
+
+- `trader run --mode live` and `trader run --mode live --dry-run` still start with the default sizing values.
+- If an entry remains below `min_entry_notional_usdt` after sizing, the runtime skips that entry at order time instead of hard-failing before startup.

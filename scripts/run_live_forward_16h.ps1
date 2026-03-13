@@ -5,7 +5,9 @@ param(
     [int]$MaxBars = 0,
     [int]$SnapshotEverySec = 300,
     [string]$Leverage = "20",
-    [string]$LiveTrading = "true"
+    [string]$LiveTrading = "true",
+    [string]$FixedNotionalUsdt = "250",
+    [string]$MinEntryNotionalUsdt = "250"
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,4 +26,6 @@ if (-not (Test-Path $runner12h)) {
     -MaxBars $MaxBars `
     -SnapshotEverySec $SnapshotEverySec `
     -Leverage $Leverage `
-    -LiveTrading $LiveTrading
+    -LiveTrading $LiveTrading `
+    -FixedNotionalUsdt $FixedNotionalUsdt `
+    -MinEntryNotionalUsdt $MinEntryNotionalUsdt

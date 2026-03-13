@@ -659,3 +659,417 @@
 
 
 
+# Experiment Log
+
+## 2026-03-11 - Binance USDT-M 1Y Historical Research (1h, 6 symbols)
+
+### Scope
+- objective:
+  - fetch real Binance USDT-M Futures historical candles for `BTCUSDT`, `ETHUSDT`, `XRPUSDT`, `TRXUSDT`, `ADAUSDT`, `SOLUSDT`
+  - store reusable local `1h` candle files for the last 365 days
+  - compare `ema_cross`, `donchian_breakout`, `rsi_mean_reversion` in one walk-forward framework
+- live/testnet code path: unchanged
+- execution model:
+  - `MARKET`
+  - taker fee `5 bps`
+  - slippage `2 bps`
+  - walk-forward `180d train / 60d test / 60d step`
+
+### Fetch command
+- `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --days 365`
+
+### Fetch result
+- first run:
+  - all 6 symbols saved under `data/futures_historical/<SYMBOL>/1h.csv`
+  - each file rows: `8760`
+  - UTC range: `2025-03-10T16:00:00Z` to `2026-03-10T15:00:00Z`
+- rerun validation:
+  - all 6 symbols returned `fetched_rows=0`
+  - confirms merge/reuse path without duplicate redownload
+
+### Search command
+- `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h`
+
+### Output artifacts
+- `out/strategy_search/summary.csv`
+- `out/strategy_search/by_symbol.csv`
+- `out/strategy_search/top_strategies.md`
+- `out/strategy_search/window_results.csv`
+
+### Result snapshot
+- ranking by OOS:
+  1. `donchian_breakout`
+  2. `rsi_mean_reversion`
+  3. `ema_cross`
+- important finding:
+  - none of the three passed the hard gate
+  - all three had negative mean OOS return on this 6-symbol / 1-year / 1h setup
+- top row metrics:
+  - `donchian_breakout`
+  - `oos_total_return_mean=-0.0230`
+  - `oos_sharpe_mean=-1.3444`
+  - `symbol_consistency_count=1/6`
+
+### Interpretation
+- current basic `1h` candidate set does not justify a positive-edge conclusion
+- the data and framework are usable, but the first-pass parameterized strategy set is not robust OOS
+- next work should change one research lever at a time:
+  - interval (`15m` or `4h`)
+  - narrower/family-specific parameter ranges
+  - alternate exit logic or regime filter
+
+### Verification
+- `uv run --active pytest -q`: PASS (`46 passed`)
+
+## 2026-03-12 - Donchian Breakout + ADX Regime Filter (1h, 6 symbols)
+
+### Scope
+- changed lever only: add `ADX` regime filter to `donchian_breakout` entry logic
+- baseline: `donchian_breakout`
+- variant: `donchian_breakout_adx`
+- fixed across both:
+  - symbols: `BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT`
+  - interval: `1h`
+  - data: saved real Binance USDT-M Futures historical candles only
+  - walk-forward: `180d train / 60d test / 60d step`
+  - execution: `MARKET`
+  - taker fee: `5 bps`
+  - slippage: `2 bps`
+  - breakout entry/exit logic: unchanged except variant entry must satisfy `ADX >= threshold`
+- ADX variant search range:
+  - `adx_window`: `10, 14, 20`
+  - `adx_threshold`: `15, 20, 25, 30`
+
+### Why this candidate
+- `donchian_breakout` was the least bad strategy in the prior baseline search:
+  - rank `1/3`
+  - `oos_total_return_mean=-0.0230`
+  - `oos_sharpe_mean=-1.3444`
+  - positive symbols `1/6`
+- the next lever should therefore stay inside the same family and try to reduce noisy range-market breakouts rather than replacing the strategy.
+
+### Why ADX
+- the failure pattern was consistent with too many weak-trend breakout entries on `1h`.
+- `ADX` is a single regime-strength lever that can gate entries without changing the existing Donchian breakout or exit rules.
+- this matches the one-lever-only constraint and keeps the rest of the framework unchanged.
+
+### Run Commands
+- focused comparison:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --strategies donchian_breakout donchian_breakout_adx`
+- default full search validation:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h`
+
+### Artifacts
+- `out/strategy_search/summary.csv`
+- `out/strategy_search/by_symbol.csv`
+- `out/strategy_search/top_strategies.md`
+- `out/strategy_search/window_results.csv`
+
+### Baseline vs Variant
+
+| strategy | oos_total_return_mean | oos_sharpe_mean | oos_max_drawdown_mean | trade_count_mean | fee_cost_total | positive_symbols | symbol_return_std | hard_gate_pass |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| donchian_breakout | -0.0230 | -1.3444 | -0.0380 | 44.0 | 262.0895 | 1/6 | 0.0273 | False |
+| donchian_breakout_adx | -0.0168 | -1.1932 | -0.0323 | 36.5 | 216.5757 | 2/6 | 0.0205 | False |
+
+### Symbol Snapshot
+- baseline positive symbols:
+  - `BTCUSDT`
+- variant positive symbols:
+  - `BTCUSDT`
+  - `XRPUSDT`
+- largest remaining drag under variant:
+  - `SOLUSDT` `oos_total_return=-0.0517`
+  - `ETHUSDT` `oos_total_return=-0.0357`
+
+### Interpretation
+- result status: `PARTIAL`
+- the `ADX` gate improved the mean OOS return, OOS sharpe, mean max drawdown, fee drag, and positive-symbol count while reducing cross-symbol dispersion.
+- however, the variant still did not flip the aggregate OOS return positive and still failed the hard gate (`3/5`), so this is not a production candidate yet.
+- the result is useful and should be kept exactly as-is rather than hidden because it narrows the search to a better Donchian branch.
+
+### Verification
+- `uv run --active pytest -q tests/test_strategy_search.py`: PASS (`3 passed`)
+- `uv run --active pytest -q`: PASS (`47 passed`)
+
+### Next Lever (1 only)
+- keep `donchian_breakout_adx` fixed and change only the timeframe lever from `1h` to `4h`.
+
+## 2026-03-12 - Donchian Breakout + ADX Timeframe A/B (1h vs 4h)
+
+### Scope
+- changed lever only: timeframe (`1h` vs `4h`)
+- baseline: `donchian_breakout_adx @ 1h`
+- variant: `donchian_breakout_adx @ 4h`
+- fixed across both:
+  - strategy logic: identical `donchian_breakout_adx`
+  - ADX search range: `adx_window={10,14,20}`, `adx_threshold={15,20,25,30}`
+  - symbols: `BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT`
+  - data source: real Binance USDT-M Futures historical candles only
+  - date windows:
+    - `1h`: `2025-03-12T12:00:00Z` to `2026-03-12T11:00:00Z`
+    - `4h`: `2025-03-12T12:00:00Z` to `2026-03-12T08:00:00Z`
+  - walk-forward: `180d train / 60d test / 60d step`
+  - execution: `MARKET`
+  - taker fee: `5 bps`
+  - slippage: `2 bps`
+
+### Why 4h
+- the prior `1h` `donchian_breakout_adx` run was less bad than the raw Donchian baseline, but still negative OOS and still below hard gate.
+- the most defensible next single lever was timeframe, because a slower bar can reduce noise and focus the same breakout + ADX regime logic on larger trend structure.
+
+### Run Commands
+- fetch 4h:
+  - `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 4h --days 365`
+- refresh 1h baseline to the same latest 1-year window:
+  - `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --days 365`
+- variant search:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 4h --strategies donchian_breakout_adx`
+- baseline rerun:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --strategies donchian_breakout_adx`
+
+### Artifact Snapshots
+- `out/strategy_search_compare/1h/summary.csv`
+- `out/strategy_search_compare/1h/by_symbol.csv`
+- `out/strategy_search_compare/1h/top_strategies.md`
+- `out/strategy_search_compare/1h/window_results.csv`
+- `out/strategy_search_compare/4h/summary.csv`
+- `out/strategy_search_compare/4h/by_symbol.csv`
+- `out/strategy_search_compare/4h/top_strategies.md`
+- `out/strategy_search_compare/4h/window_results.csv`
+
+### 1h vs 4h
+
+| interval | oos_total_return_mean | oos_sharpe_mean | oos_max_drawdown_mean | trade_count_mean | fee_cost_total | positive_symbols | symbol_return_std | hard_gate_count | hard_gate_pass |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 1h | -0.0160 | -1.0283 | -0.0316 | 39.5 | 234.2254 | 2/6 | 0.0208 | 3/5 | False |
+| 4h | -0.0129 | -0.9962 | -0.0254 | 10.7 | 62.9543 | 0/6 | 0.0093 | 2/5 | False |
+
+### Improvement / Degradation
+- improved on `4h`:
+  - mean OOS return less negative
+  - OOS sharpe less negative
+  - mean max drawdown less severe
+  - trade count dropped sharply
+  - fee cost total fell from `234.2254` to `62.9543`
+  - cross-symbol dispersion dropped from `0.0208` to `0.0093`
+- worsened on `4h`:
+  - positive symbols fell from `2/6` to `0/6`
+  - hard-gate score fell from `3/5` to `2/5`
+- symbol-level note:
+  - `1h` had positive `BTCUSDT` and `XRPUSDT`
+  - `4h` had no positive symbol, but losses became more tightly clustered
+
+### Interpretation
+- result status: `PARTIAL`
+- `4h` does look cleaner and cheaper than `1h`, which is consistent with the larger-trend hypothesis.
+- however, the cleaner profile did not translate into broad positive symbol coverage, so the branch is still not a hard-gate candidate.
+- this should be recorded as mixed evidence rather than a clean success or failure: the timeframe lever improved quality-of-trading metrics, but not robustness.
+
+### Verification
+- `uv run --active pytest -q`: PASS (`48 passed`)
+
+### Next Lever (1 only)
+- keep `donchian_breakout_adx @ 4h` fixed and change only the symbol-universe lever by removing the weakest tail symbol first (`SOLUSDT`) to test whether the edge is concentrated in a smaller subset.
+
+## 2026-03-12 - Donchian Breakout + ADX 4h Universe A/B (with SOL vs without SOL)
+
+### Scope
+- changed lever only: symbol universe
+- baseline: `donchian_breakout_adx @ 4h` with `BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT`
+- variant: `donchian_breakout_adx @ 4h` with `BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT`
+- fixed across both:
+  - strategy logic: identical `donchian_breakout_adx`
+  - timeframe: `4h`
+  - data source: real Binance USDT-M Futures historical candles only
+  - date window: last 1 year (`2025-03-12T12:00:00Z` to `2026-03-12T08:00:00Z`)
+  - walk-forward: `180d train / 60d test / 60d step`
+  - execution: `MARKET`
+  - taker fee: `5 bps`
+  - slippage: `2 bps`
+
+### Why SOLUSDT
+- `SOLUSDT` was the weakest symbol in the prior `4h` baseline:
+  - `oos_total_return=-0.0297`
+  - `oos_sharpe=-1.2627`
+  - `oos_max_drawdown=-0.0519`
+  - `trade_count=19`
+- it was the deepest drag in the universe and did not contribute to positive-symbol breadth, so it was the cleanest single-symbol exclusion lever.
+
+### Run Commands
+- with `SOLUSDT`:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 4h --strategies donchian_breakout_adx --out-root out/strategy_search_compare/4h_with_sol`
+- without `SOLUSDT`:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT --interval 4h --strategies donchian_breakout_adx --out-root out/strategy_search_compare/4h_without_sol`
+
+### Artifact Snapshots
+- `out/strategy_search_compare/4h_with_sol/summary.csv`
+- `out/strategy_search_compare/4h_with_sol/by_symbol.csv`
+- `out/strategy_search_compare/4h_with_sol/top_strategies.md`
+- `out/strategy_search_compare/4h_with_sol/window_results.csv`
+- `out/strategy_search_compare/4h_without_sol/summary.csv`
+- `out/strategy_search_compare/4h_without_sol/by_symbol.csv`
+- `out/strategy_search_compare/4h_without_sol/top_strategies.md`
+- `out/strategy_search_compare/4h_without_sol/window_results.csv`
+
+### with SOL vs without SOL
+
+| universe | oos_total_return_mean | oos_sharpe_mean | oos_max_drawdown_mean | trade_count_mean | fee_cost_total | positive_symbols | symbol_return_std | hard_gate_count | hard_gate_pass |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| with SOL | -0.0129 | -0.9962 | -0.0254 | 10.7 | 62.9543 | 0/6 | 0.0093 | 2/5 | False |
+| without SOL | -0.0096 | -0.9428 | -0.0201 | 9.0 | 44.5202 | 0/5 | 0.0060 | 2/5 | False |
+
+### Improvement / Degradation
+- improved without `SOLUSDT`:
+  - OOS mean return less negative
+  - OOS sharpe less negative
+  - OOS max drawdown less severe
+  - trade count slightly lower
+  - fee cost total lower
+  - cross-symbol dispersion lower
+- unchanged / still problematic:
+  - positive symbols stayed at `0`
+  - hard-gate score stayed at `2/5`
+- interpretation:
+  - the universe got cleaner, but not materially more robust.
+  - this is evidence that `SOLUSDT` was a drag, but removing it alone is not enough to rescue the branch.
+
+### Verification
+- `uv run --active pytest -q`: PASS (`48 passed`)
+
+### Next Lever (1 only)
+- keep `donchian_breakout_adx @ 4h` and the reduced universe fixed, then change only the exit-speed lever by tightening `exit_period` around the winning branch.
+
+## 2026-03-12 - Broad Sweep Strategy Discovery Matrix
+
+### Scope
+- objective:
+  - run an aggressive but budgeted discovery sweep over multiple strategy families on real Binance USDT-M Futures history
+- fixed across the sweep:
+  - data source: local mainnet Binance futures historical candles only
+  - symbols: `BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT`
+  - period: latest 1 year
+  - intervals: `1h`, `4h`
+  - walk-forward: `180d train / 60d test / 60d step`
+  - execution: `MARKET`
+  - taker fee: `5 bps`
+  - slippage: `2 bps`
+- families executed:
+  - `ema_cross`
+  - `donchian_breakout`
+  - `supertrend`
+  - `price_adx_breakout`
+  - `rsi_mean_reversion`
+  - `bollinger`
+  - `macd`
+  - `stoch_rsi`
+
+### Matrix Budget
+
+| family | raw combos |
+|---|---:|
+| ema_cross | 50 |
+| donchian_breakout | 12 |
+| supertrend | 12 |
+| price_adx_breakout | 30 |
+| rsi_mean_reversion | 54 |
+| bollinger | 36 |
+| macd | 16 |
+| stoch_rsi | 24 |
+| total | 234 |
+
+- default executed cap: `96` combos
+- estimated backtests: `6912`
+- observed runtime: about `495s` (`8.25` minutes) with `jobs=8`
+
+### Run Commands
+- data refresh:
+  - `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --days 365`
+  - `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 4h --days 365`
+- broad sweep:
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --intervals 1h 4h --mode broad-sweep --time-budget-hours 6`
+
+### Artifacts
+- `out/strategy_search_matrix/summary.csv`
+- `out/strategy_search_matrix/by_symbol.csv`
+- `out/strategy_search_matrix/window_results.csv`
+- `out/strategy_search_matrix/top_strategies.md`
+- `out/strategy_search_matrix/strategy_family_summary.csv`
+
+### Top Family Candidates
+
+| family | interval | oos_total_return_mean | oos_sharpe_mean | oos_max_drawdown_mean | trade_count_mean | fee_cost_total | positive_symbols | symbol_return_std | hard_gate_pass |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| donchian_breakout | 4h | -0.0035 | -0.5540 | -0.0141 | 7.8 | 46.9741 | 2 | 0.0091 | False |
+| ema_cross | 4h | -0.0003 | -0.2491 | -0.0010 | 0.5 | 2.9947 | 1 | 0.0016 | False |
+| price_adx_breakout | 1h | -0.0002 | -0.1241 | -0.0226 | 52.3 | 313.7033 | 2 | 0.0078 | False |
+| macd | 4h | -0.0081 | -0.2471 | -0.0435 | 62.2 | 372.8684 | 2 | 0.0126 | False |
+| stoch_rsi | 4h | -0.0078 | -0.8326 | -0.0249 | 63.3 | 378.7668 | 1 | 0.0161 | False |
+
+### Interpretation
+- result status: `PARTIAL`
+- hard-gate pass count stayed at `0`, so the sweep produced no production-ready winner.
+- the discovery value is still real:
+  - trend-following families dominated the upper ranks
+  - `4h` generally beat `1h` among the best candidates
+  - mean-reversion families were materially weaker after fees/slippage on this universe
+- the sweep narrowed the next research set to a few less-bad branches instead of eight equally plausible families.
+
+### Next Lever (1 only)
+- keep the best `donchian_breakout @ 4h` parameter pocket fixed and add only an `ADX` regime filter in the next follow-up.
+
+## 2026-03-14 - Repo Reorientation: Historical-First Philosophy Reinforcement
+
+### Motivation
+- Recent work over-invested in testnet/live-forward operational validation (12h/16h runners, budget guards, protective orders)
+- This is correct for operational validation, but became misaligned with the PRIMARY objective: finding profitable strategies
+- Live/testnet proves order execution quality, NOT strategy edge
+- Demo data may differ from mainnet historical data
+- Zero hard-gate winners found in broad sweep means continued operational validation is premature
+
+### What Changed (Documentation and Guidance)
+- README.md: rewritten to emphasize "Historical Research First, Operational Validation Second"
+- README.md: moved historical research workflow to the top, ahead of live/testnet sections
+- docs/notes.md: added explicit "Repo Direction Clarity" section separating strategy discovery from operational validation
+- docs/plan.md: marked broad sweep as COMPLETED, added "Post-Sweep Next Actions" with 4 concrete research directions
+- scripts/run_strategy_search.py: enhanced output with hard-gate summary and next-action guidance
+
+### What Changed (Code Improvements)
+- scripts/run_strategy_search.py: added hard-gate pass count summary to both legacy and broad-sweep modes
+- scripts/run_strategy_search.py: added actionable next-step guidance when zero hard-gate winners found
+- Output now explicitly warns when no strategies pass hard gate and suggests concrete follow-up research directions
+
+### What Did NOT Change (Correct Boundaries)
+- Live/testnet execution code: unchanged (operational validation remains sound)
+- Historical research code: unchanged (already well-designed)
+- Broad sweep framework: unchanged (already complete and functional)
+- Test suite: unchanged (already passing)
+
+### Verification
+- `uv run --active pytest -q`: confirms all tests still pass
+- `uv run --active python scripts/run_strategy_search.py --help`: confirms enhanced CLI still works
+- Dry-run broad sweep execution: confirms enhanced output formatting
+
+### Key Takeaway
+- The repo infrastructure is STRONG on both research and operational sides
+- The weakness is strategy edge discovery, not code quality
+- Next work should focus on research exploration (broader universe, alternative timeframes, regime filters, cross-sectional approaches)
+- Testnet/live-forward should PAUSE until at least one hard-gate winner emerges from historical research
+
+### Recommended Next 3 Actions (Research-First)
+1. **15m interval exploration**: Run broad sweep on 15m (hypothesis: higher frequency may reveal scalping edge)
+   ```bash
+   uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 15m --days 365
+   uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --intervals 15m --mode broad-sweep
+   ```
+
+2. **Expanded universe exploration**: Test 15-20 symbols across market cap tiers (hypothesis: edge concentrated in specific symbols)
+   ```bash
+   uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT BNBUSDT SOLUSDT XRPUSDT ADAUSDT DOGEUSDT TRXUSDT MATICUSDT DOTUSDT AVAXUSDT LINKUSDT UNIUSDT ATOMUSDT LTCUSDT --interval 1h --days 365
+   uv run --active python scripts/run_strategy_search.py --symbols <15-symbols> --intervals 1h 4h --mode broad-sweep
+   ```
+
+3. **Portfolio cross-sectional approach**: Pivot from single-symbol directional to multi-symbol relative value
+   - Leverage existing `trader/experiments/runner.py` portfolio suite
+   - Input: historical data mode instead of live/testnet
+   - Hypothesis: Single-symbol directional edge is weak, but cross-sectional edge may exist

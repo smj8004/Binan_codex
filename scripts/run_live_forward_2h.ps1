@@ -4,7 +4,9 @@ param(
     [string]$Strategy = "ema_cross",
     [int]$MaxBars = 120,
     [int]$SnapshotEverySec = 300,
-    [switch]$RealtimeOnly = $true
+    [switch]$RealtimeOnly = $true,
+    [string]$FixedNotionalUsdt = "250",
+    [string]$MinEntryNotionalUsdt = "250"
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,12 +17,19 @@ function Write-Header([string]$Text) {
 }
 
 Write-Header "Prepare Environment"
+$fixedNotionalValue = [double]$FixedNotionalUsdt
+$minEntryNotionalValue = [double]$MinEntryNotionalUsdt
+if ($fixedNotionalValue -lt $minEntryNotionalValue) {
+    throw "FixedNotionalUsdt ($fixedNotionalValue) must be >= MinEntryNotionalUsdt ($minEntryNotionalValue)"
+}
 $env:BINANCE_TESTNET_API_KEY = $null
 $env:BINANCE_TESTNET_API_SECRET = $null
 $env:BINANCE_API_KEY = $null
 $env:BINANCE_API_SECRET = $null
 $env:LIVE_TRADING = "true"
 $env:LEVERAGE = "20"
+$env:RUN_FIXED_NOTIONAL_USDT = $FixedNotionalUsdt
+$env:MIN_ENTRY_NOTIONAL_USDT = $MinEntryNotionalUsdt
 
 $startUtc = (Get-Date).ToUniversalTime()
 $stamp = $startUtc.ToString("yyyyMMdd_HHmmss")
@@ -52,6 +61,8 @@ $runCmd = @(
 ) -join " "
 
 Write-Header "Run Command"
+Write-Host "fixed_notional_usdt=$FixedNotionalUsdt"
+Write-Host "min_entry_notional_usdt=$MinEntryNotionalUsdt"
 Write-Host $runCmd
 
 $proc = Start-Process `

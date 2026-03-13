@@ -1,8 +1,17 @@
 ﻿# binance-trader
 
-Python 3.11+ Binance USDT-M trading toolkit with:
+Python 3.11+ Binance USDT-M quantitative research and trading toolkit.
+
+**Core Philosophy: Historical Research First, Operational Validation Second**
+
+This repository is designed for:
+1. **Strategy Discovery**: Historical data analysis on real Binance USDT-M Futures data to identify profitable edge
+2. **Operational Validation**: Testnet/live-forward execution to verify runtime stability and order flow integrity
+
+Primary capabilities:
+- Historical research: multi-family strategy search with walk-forward OOS evaluation
 - Backtest / Optimize / Replay
-- Runtime `paper` / `live`
+- Runtime `paper` / `live` (testnet-only for operational validation)
 - SQLite persistence for runs/orders/fills/trades/events/runtime state
 
 ## Install
@@ -122,6 +131,60 @@ uv run trader optimize --strategy ema_cross --symbols BTC/USDT --timeframe 1h \
 uv run trader replay --run-id <id> --export out/replay/
 uv run trader replay --from-opt out/opt_results.csv --top 20 --export out/replay_report.csv
 ```
+
+## Recommended Workflow: Start with Historical Research
+
+### Step 1: Fetch Real Binance USDT-M Futures Historical Data
+
+Collect real mainnet historical candles into dedicated local files:
+
+```bash
+uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --days 365
+uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 4h --days 365
+```
+
+Data is cached under `data/futures_historical/<SYMBOL>/<INTERVAL>.csv` for reuse.
+
+### Step 2: Run Strategy Discovery Search
+
+**Quick single-interval search:**
+```bash
+uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h
+```
+
+**Broad multi-family multi-interval sweep (recommended for discovery):**
+```bash
+uv run --active python scripts/run_strategy_search.py \
+  --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT \
+  --intervals 1h 4h \
+  --mode broad-sweep \
+  --time-budget-hours 6
+```
+
+Primary research outputs:
+- `out/strategy_search/summary.csv` (legacy mode)
+- `out/strategy_search/by_symbol.csv` (legacy mode)
+- `out/strategy_search/top_strategies.md` (legacy mode)
+- `out/strategy_search_matrix/summary.csv` (broad-sweep mode)
+- `out/strategy_search_matrix/strategy_family_summary.csv` (broad-sweep mode)
+- `out/strategy_search_matrix/top_strategies.md` (broad-sweep mode)
+
+**Important:** Strategy search uses rolling walk-forward OOS evaluation (180d train / 60d test / 60d step by default) with realistic fees (5 bps taker) and slippage (2 bps). Only strategies that pass OOS performance gates should proceed to operational validation.
+
+### Step 3: Operational Validation (Testnet Live-Forward)
+
+ONLY after identifying a candidate strategy from historical research should you proceed to testnet/live-forward for operational validation.
+
+Testnet/live-forward validates:
+- Order execution quality
+- Websocket stability
+- Budget guard behavior
+- Protective order flow
+- Runtime state persistence
+
+It does NOT validate strategy edge (use historical research for that).
+
+See "Live Runtime (Safety First)" section below for operational validation commands.
 
 ## Edge Validation Experiments (Cost / Walk-forward / Regime)
 
@@ -373,6 +436,8 @@ powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1
 - `min_entry_notional_usdt` default: `250.0`
 - Reduce-only orders are excluded from the floor check.
 - The floor check applies only to `reduce_only=False` entries.
+- If `fixed_notional_usdt < min_entry_notional_usdt`, runtime startup still proceeds.
+- The small entry is skipped only at order time, and `entry_notional_below_floor` diagnostics are recorded.
 
 Runtime CLI overrides:
 

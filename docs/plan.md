@@ -1,91 +1,251 @@
-# Plan: Demo-Visible Live Forward Trading on Testnet with Budget Guard
+# Plan: Binance Futures Historical Research Pipeline
 
-Date: 2026-03-08
-Status: Draft (waiting for `approved`)
+Date: 2026-03-11
+Status: Active
 
-## Problem statement
+## 1. Data pipeline
 
-- `paper` mode never sends exchange orders, so Binance Demo Futures UI cannot show account changes.
-- `live` mode can still reject all orders when `LIVE_TRADING=false`.
-- There is no pre-order check against exchange account `available balance`.
-- Goal: testnet-only live-forward flow (no mainnet), with mandatory budget check before order submission.
+- Source:
+  - Binance USDT-M Futures public mainnet endpoint
+  - primary endpoint: `/fapi/v1/klines`
+- Scope:
+  - last 365 days
+  - symbols:
+    - `BTCUSDT`
+    - `ETHUSDT`
+    - `XRPUSDT`
+    - `TRXUSDT`
+    - `ADAUSDT`
+    - `SOLUSDT`
+  - default interval: `1h`
+  - design must remain extensible to `15m` and `4h`
+- Implementation:
+  - add `trader/data/binance_futures_historical.py`
+  - add `scripts/fetch_futures_historical.py`
+- Required behavior:
+  - paginate until full requested range is covered
+  - respect rate limits with conservative delay/retry
+  - save local files
+  - deduplicate rows by timestamp
+  - merge with existing files on rerun
+  - avoid unnecessary re-download when cached data already covers the requested window
+- File structure:
+  - `data/futures_historical/BTCUSDT/1h.csv`
+  - `data/futures_historical/ETHUSDT/1h.csv`
+  - `data/futures_historical/XRPUSDT/1h.csv`
+  - `data/futures_historical/TRXUSDT/1h.csv`
+  - `data/futures_historical/ADAUSDT/1h.csv`
+  - `data/futures_historical/SOLUSDT/1h.csv`
 
-## Proposed approach
+## 2. Strategy search framework
 
-1. Live mode must be testnet-only
-- Add a hard safety gate in CLI run path: reject `--mode live` unless env is `testnet`.
-- Keep current futures testnet endpoint path in broker/data layers.
+- Add:
+  - `trader/research/strategy_search.py`
+  - `scripts/run_strategy_search.py`
+- Compare at least these 3 strategy families in the same framework:
+  - `EMA cross trend-following`
+  - `Donchian breakout`
+  - `RSI mean-reversion`
+- Strategy stance definition:
+  - EMA cross:
+    - compare `long/flat` and `long/short`
+  - Donchian breakout:
+    - compare `long/flat` and `long/short`
+  - RSI mean-reversion:
+    - compare `long/flat` and `long/short`
+- Parameter sweep ranges:
+  - EMA cross:
+    - `fast_len`: `[8, 21]`
+    - `slow_len`: `[55, 89]`
+    - `allow_short`: `[False, True]`
+  - Donchian breakout:
+    - `entry_period`: `[20, 55]`
+    - `exit_period`: `[10, 20]`
+    - `allow_short`: `[False, True]`
+  - RSI mean-reversion:
+    - `rsi_period`: `[7, 14]`
+    - `lower`: `[20, 30]`
+    - `upper`: `[70]`
+    - `exit_threshold`: `[50]`
+    - `allow_short`: `[False, True]`
+- Common execution assumptions:
+  - same backtest engine for all strategies
+  - same cost model for all strategies
+  - fixed leverage, not swept in this task
+  - no live/testnet order path involved
 
-2. Add pre-order account budget guard (default ON)
-- Introduce an account budget guard (name flexible) that pulls `available balance` from broker.
-- Run this guard right before order submission for new entry/reverse-entry orders.
-- If insufficient:
-  - do not call `broker.place_order`
-  - emit event/status reason `insufficient_budget`
-  - skip that order only (no full runtime halt)
+## 3. Evaluation framework
 
-3. Multi-symbol consistency
-- Reuse current single broker shared by engines.
-- In orchestrator single consumer loop, maintain a per-bar account budget snapshot.
-- After each accepted order, reserve budget in snapshot immediately (optimistic reserve) to avoid over-allocation on same bar.
+- Must include:
+  - train/test split
+  - rolling walk-forward OOS
+  - symbol-by-symbol comparison
+  - aggregate comparison across all six symbols
+- Default walk-forward structure:
+  - `train_days=180`
+  - `test_days=60`
+  - `step_days=60`
+- Per-window process:
+  1. evaluate parameter grid on train window
+  2. select best train configuration inside that strategy family
+  3. evaluate selected configuration on the next OOS window
+  4. roll forward
+- Required metrics per strategy/symbol aggregate:
+  - `total_return`
+  - `cagr`
+  - `max_drawdown`
+  - `sharpe_like`
+  - `trade_count`
+  - `win_rate`
+  - `fee_cost_total`
+  - `avg_trade_return`
+  - `oos_total_return`
+  - `oos_sharpe`
+  - `symbol_consistency_count`
+  - `symbol_return_std`
+- Ranking rule:
+  - sort primarily by OOS performance
+  - use hard-gate flags as filter/context, not as a hidden override
+- Hard gates for “top candidate” label:
+  - `oos_total_return > 0`
+  - drawdown not excessive
+  - trade count not trivially small
+  - fees do not consume the whole gross edge
+  - consistent positive behavior in at least 3 of 6 symbols
 
-4. Protective-order behavior
-- Keep TP/SL protective flow intact.
-- Reduce-only protective orders should not be blocked by entry-budget guard (or use a separate permissive policy), to avoid disabling risk protection.
+## 4. Deliverables
 
-5. Rollback switch
-- Add `--no-budget-guard` option, default ON.
+- Data collection script:
+  - `scripts/fetch_futures_historical.py`
+- Strategy search script:
+  - `scripts/run_strategy_search.py`
+- Core modules:
+  - `trader/data/binance_futures_historical.py`
+  - `trader/research/strategy_search.py`
+- Output artifacts:
+  - `out/strategy_search/summary.csv`
+  - `out/strategy_search/by_symbol.csv`
+  - `out/strategy_search/top_strategies.md`
+- Docs updates:
+  - `docs/research.md`
+  - `docs/plan.md`
+  - `docs/todo.md`
+  - `docs/decisions.md`
+  - `docs/notes.md`
+  - `guide/EXPERIMENT_LOG.md`
+  - `README.md` if command documentation is needed
 
-## File-level change list
+## 5. Verification
 
-1. `trader/runtime.py`
-- Add pre-order budget-guard hook in `_place_order`.
-- Record `insufficient_budget` events and skip reason.
-- Add budget snapshot/reservation handling compatible with multi-symbol run loop.
+- Required:
+  - `uv run --active pytest -q`
+- Functional checks:
+  - fetcher saves and reloads sorted candles without duplicate timestamps
+  - strategy search runs from saved local files
+  - output CSV/MD artifacts are generated deterministically
+- Final runnable commands:
+  - `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --days 365`
+  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h`
 
-2. `trader/broker/live_binance.py`
-- Add normalized account budget snapshot reader (available balance and related fields).
-- Keep existing `place_order/create_order` flow unchanged.
+## 2026-03-12 Broad Sweep Discovery Plan (COMPLETED)
 
-3. `trader/config.py`
-- Add budget-guard config default and parsing.
+### Why broaden now
 
-4. `trader/cli.py`
-- Add `--budget-guard/--no-budget-guard`.
-- Enforce testnet-only live execution.
-- Pass guard option into runtime config.
+- the prior single-lever sequence improved some branches but produced zero hard-gate winners
+- the next useful step is discovery, not another narrow tweak on already-weak candidates
+- the sweep still stays historical-data-first, fee-inclusive, and OOS-ranked
 
-5. `tests/test_budget_guard.py`
-- Case 1: insufficient budget -> no order submission (broker spy/mock).
-- Case 2: sufficient budget -> order submission proceeds and protective-order flow remains.
+### Status: COMPLETED
+- Broad sweep framework implemented and executed
+- 8 strategy families tested across 1h/4h intervals
+- Result: No hard-gate pass on current 1-year/6-symbol/fee-inclusive setup
+- Finding: Trend-following families (donchian_breakout, ema_cross @ 4h) least-bad, mean-reversion families weaker
 
-6. `tests/test_live_testnet_order_path_smoke.py`
-- Minimal smoke around live testnet order path plus budget guard integration.
+## 2026-03-14 Post-Sweep Next Actions
 
-7. Docs
-- Update `README.md` with demo UI live-forward commands.
-- Update `guide/BASELINE_STATE.md` and `guide/EXPERIMENT_LOG.md` with change log and verification gate records.
+### Current State
+- Historical research infrastructure is STRONG (data fetch, broad sweep, OOS ranking, family comparison)
+- Operational validation infrastructure is STRONG (testnet runners, budget guards, protective orders)
+- Strategy edge discovery is WEAK (zero hard-gate passes on current universe/intervals/families)
 
-## Rollback
+### Recommended Next Research Directions (Pick ONE)
 
-- `--no-budget-guard` available; default remains ON.
-- No rollback path to mainnet live; live remains testnet-only by policy.
+**Option A: Broader Universe Exploration**
+- Expand symbol universe beyond current 6 (test 15-20 symbols across market cap tiers)
+- Hypothesis: Edge may be concentrated in specific symbols not in current universe
+- Cost: More data fetch time, but same backtest framework
 
-## Verification
+**Option B: Alternative Timeframe Exploration**
+- Test 15m, 2h, 8h, 1d intervals
+- Hypothesis: Current 1h/4h may be suboptimal for trend/mean-reversion balance
+- Cost: Minimal (just re-fetch and re-run search)
 
-1. `uv run --active pytest -q`
-2. `uv run --active trader doctor --env testnet`
-3. 1-symbol live testnet smoke (5-10 minutes)
-4. 3-symbol live testnet smoke (30-60 minutes)
-5. Demo UI checks:
-- Positions update
-- Open Orders update
-- Assets/balance update
-- Insufficient budget path logs `insufficient_budget` and sends no order
+**Option C: Regime-Conditional Strategy Layers**
+- Add volatility regime filters (VIX-like, ATR percentile, realized vol buckets)
+- Add trend strength filters (ADX bands, slope consistency)
+- Hypothesis: Unconditional strategies fail, but regime-conditional may pass
+- Cost: Moderate implementation work on strategy layer
 
-## Command set to include in README/guide
+**Option D: Portfolio Cross-Sectional Approach**
+- Shift from single-symbol directional to multi-symbol long/short cross-section
+- Use existing portfolio experiment suite
+- Hypothesis: Single-symbol edge is weak, but relative value edge may exist
+- Cost: Already implemented in `trader/experiments/`, just needs historical data input mode
 
-- 1 symbol, 10 minutes:
-  - `uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT --timeframe 1m --strategy ema_cross --max-bars 10 --halt-on-error --yes-i-understand-live-risk`
-- 3 symbols, 60 minutes:
-  - `uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT,ETH/USDT,BNB/USDT --timeframe 1m --strategy ema_cross --max-bars 60 --halt-on-error --yes-i-understand-live-risk`
+**Recommendation: Start with Option B (15m exploration) - lowest cost, fastest feedback**
+
+### Families in scope
+
+- `ema_cross`
+- `donchian_breakout`
+- `supertrend`
+- `price_adx_breakout`
+- `rsi_mean_reversion`
+- `bollinger`
+- `macd`
+- `stoch_rsi`
+
+### Raw matrix size
+
+| family | raw combos |
+|---|---:|
+| ema_cross | 50 |
+| donchian_breakout | 12 |
+| supertrend | 12 |
+| price_adx_breakout | 30 |
+| rsi_mean_reversion | 54 |
+| bollinger | 36 |
+| macd | 16 |
+| stoch_rsi | 24 |
+| total | 234 |
+
+### Budgeted execution shape
+
+- intervals: `2` (`1h`, `4h`)
+- symbols: `6`
+- walk-forward windows per symbol/interval on the latest 1-year data: `3`
+- raw combos: `234`
+- default selected combos after round-robin cap: `96`
+- approximate backtest count:
+  - `96 combos x 6 symbols x 2 intervals x 3 windows x 2 train/test passes = 6912`
+- observed broad-sweep runtime on this machine:
+  - about `495s` (`8.25` minutes) with `jobs=8`
+- conclusion:
+  - the capped default run is comfortably inside the 6-hour budget and leaves room for narrower follow-up sweeps
+
+### Ranking contract
+
+- `rank_score` is composite, not pure return sort
+- score priorities:
+  - OOS total return first
+  - OOS sharpe bonus
+  - mean max drawdown penalty
+  - positive-symbol bonus
+  - fee-drag penalty
+  - trade-count penalty at extremes
+- hard gate remains explicit and separate from the score:
+  - positive OOS return
+  - positive OOS sharpe
+  - non-excessive drawdown
+  - positive symbols `>= 3`
+  - fee ratio not consuming the edge

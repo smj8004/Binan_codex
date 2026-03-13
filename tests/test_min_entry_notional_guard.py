@@ -118,6 +118,10 @@ def test_min_entry_notional_blocks_small_entry(tmp_path) -> None:
         payload = blocked[0].get("payload") or {}
         assert float(payload.get("requested_notional", 0.0)) == 100.0
         assert float(payload.get("min_entry_notional", 0.0)) == 250.0
+        risk_state = engine._risk_state_payload(mark_price=100.0)
+        assert int(risk_state.get("min_entry_notional_block_count", 0)) == 1
+        samples = risk_state.get("min_entry_notional_block_samples", [])
+        assert isinstance(samples, list) and samples
     finally:
         storage.close()
 

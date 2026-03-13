@@ -6,7 +6,9 @@ param(
     [int]$MaxBars = 0,
     [int]$SnapshotEverySec = 300,
     [string]$Leverage = "20",
-    [string]$LiveTrading = "true"
+    [string]$LiveTrading = "true",
+    [string]$FixedNotionalUsdt = "250",
+    [string]$MinEntryNotionalUsdt = "250"
 )
 
 $ErrorActionPreference = "Stop"
@@ -175,6 +177,11 @@ if ($targetBars -le 0) {
 if ($SnapshotEverySec -lt 60) {
     throw "SnapshotEverySec must be >= 60"
 }
+$fixedNotionalValue = [double]$FixedNotionalUsdt
+$minEntryNotionalValue = [double]$MinEntryNotionalUsdt
+if ($fixedNotionalValue -lt $minEntryNotionalValue) {
+    throw "FixedNotionalUsdt ($fixedNotionalValue) must be >= MinEntryNotionalUsdt ($minEntryNotionalValue)"
+}
 
 Write-Header "Prepare Environment"
 $env:BINANCE_TESTNET_API_KEY = $null
@@ -183,6 +190,8 @@ $env:BINANCE_API_KEY = $null
 $env:BINANCE_API_SECRET = $null
 $env:LIVE_TRADING = $LiveTrading
 $env:LEVERAGE = $Leverage
+$env:RUN_FIXED_NOTIONAL_USDT = $FixedNotionalUsdt
+$env:MIN_ENTRY_NOTIONAL_USDT = $MinEntryNotionalUsdt
 
 $startUtc = (Get-Date).ToUniversalTime()
 $stamp = $startUtc.ToString("yyyyMMdd_HHmmss")
@@ -211,6 +220,8 @@ Write-Host "env=testnet"
 Write-Host "realtime_only=true"
 Write-Host "live_trading=$LiveTrading"
 Write-Host "leverage=$Leverage"
+Write-Host "fixed_notional_usdt=$FixedNotionalUsdt"
+Write-Host "min_entry_notional_usdt=$MinEntryNotionalUsdt"
 
 $runStdOut = Join-Path $outDir "run_stdout.log"
 $runStdErr = Join-Path $outDir "run_stderr.log"
