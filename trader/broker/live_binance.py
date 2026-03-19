@@ -69,10 +69,12 @@ class LiveBinanceBroker(Broker):
         self._orders_by_id: dict[str, dict[str, Any]] = {}
         self._positions: dict[str, dict[str, float]] = {}
         self._symbol_filters_cache: dict[str, dict[str, float | None]] = {}
-        self._seen_fill_keys: set[str] = set()
+        self._seen_fill_keys: dict[str, str] = {}
         self._last_user_stream_update: float | None = None
         self._storage: Any | None = None
         self._storage_run_id: str | None = None
+        self._preflight_futures_permission_cache: dict[str, Any] | None = None
+        self._preflight_futures_permission_ttl_sec = 30.0
 
         self.use_user_stream = bool(use_user_stream)
         self.handles_fill_persistence = self.use_user_stream
@@ -568,7 +570,7 @@ class LiveBinanceBroker(Broker):
         futures_ok = True
         futures_detail = "futures account access ok"
         futures_endpoint_hint = "GET /fapi/v2/balance (fetch_balance type=future)"
-        futures_ok, futures_meta = self._fetch_futures_balance_direct()
+        futures_ok, futures_meta = self._cached_futures_permission_check()
         futures_endpoint_hint = str(futures_meta.get("endpoint", futures_endpoint_hint))
         futures_method = str(futures_meta.get("method", "")).strip()
         futures_http_status = self._coerce_http_status(futures_meta.get("http_status"))
@@ -944,6 +946,17 @@ class LiveBinanceBroker(Broker):
             "info": raw,
         }
 
+    def _cached_futures_permission_check(self) -> tuple[bool, dict[str, Any]]:
+        now = time.monotonic()
+        with self._lock:
+            cache = self._preflight_futures_permission_cache
+            if cache is not None and (now - float(cache.get("ts", 0.0))) <= self._preflight_futures_permission_ttl_sec:
+                return bool(cache.get("ok", False)), dict(cache.get("meta", {}))
+        ok, meta = self._fetch_futures_balance_direct()
+        with self._lock:
+            self._preflight_futures_permission_cache = {"ts": now, "ok": ok, "meta": dict(meta)}
+        return ok, meta
+
     def _retry_fetch_ticker_price(self, symbol: str) -> float | None:
         attempt = 0
         while True:
@@ -1248,6 +1261,7 @@ class LiveBinanceBroker(Broker):
         self._storage.save_order(
             {
                 "run_id": self._storage_run_id,
+                "symbol": str(order_data.get("s", "")) or None,
                 "order_id": order_id,
                 "client_order_id": order_data.get("c"),
                 "ts": str(pd_timestamp_from_ms(order_data.get("T") or payload.get("E") or 0)),
@@ -1265,10 +1279,134 @@ class LiveBinanceBroker(Broker):
             }
         )
 
+    def _fill_alias_keys(
+        self,
+        *,
+        order_id: str,
+        side: str,
+        fill_qty: float,
+        fill_price: float,
+        trade_id: str | None = None,
+        trade_time: Any | None = None,
+    ) -> set[str]:
+        side_up = self._normalize_side(side)
+        keys = {f"aggregate:{order_id}:{side_up}:{fill_qty:.12f}:{fill_price:.12f}"}
+        trade_id_norm = str(trade_id or "").strip()
+        if trade_id_norm and trade_id_norm != "-1":
+            keys.add(f"trade:{order_id}:{trade_id_norm}")
+        try:
+            trade_time_key = int(trade_time)
+        except Exception:
+            trade_time_key = 0
+        if trade_time_key > 0:
+            keys.add(f"composite:{order_id}:{trade_time_key}:{side_up}:{fill_qty:.12f}:{fill_price:.12f}")
+        return keys
+
+    def _partial_fill_group_key(self, order_id: str) -> str:
+        run_id = str(self._storage_run_id or "unknown-run")
+        return f"{run_id}:{order_id}"
+
+    def _register_fill_keys(self, *, fill_id: str, keys: set[str]) -> str | None:
+        normalized = {str(key) for key in keys if str(key)}
+        if not normalized:
+            return None
+        with self._lock:
+            existing_fill_ids = {self._seen_fill_keys[key] for key in normalized if key in self._seen_fill_keys}
+            if existing_fill_ids:
+                return sorted(existing_fill_ids)[0]
+            for key in normalized:
+                self._seen_fill_keys[key] = fill_id
+        return None
+
+    def _save_fill_record(
+        self,
+        *,
+        fill_id: str,
+        symbol: str | None,
+        order_id: str,
+        ts: str,
+        side: str,
+        fill_qty: float,
+        fill_price: float,
+        fee: float,
+        liquidity: str,
+        alias_keys: set[str] | None = None,
+        source: str,
+        provenance_detail: str | None = None,
+        is_partial_fill: bool = False,
+        partial_fill_group_key: str | None = None,
+        is_reconciled: bool = False,
+        reconciled_from_missing_ws: bool = False,
+        trade_query_available: bool | None = None,
+        trade_query_attempted: bool = False,
+    ) -> bool:
+        if self._storage is None or self._storage_run_id is None:
+            return False
+        keys = set(alias_keys or set())
+        keys.add(fill_id)
+        aggregate_fill_id = None
+        if (
+            source != "aggregated_fallback"
+            and order_id
+            and hasattr(self._storage, "find_fill_id_by_order_source")
+        ):
+            aggregate_fill_id = self._storage.find_fill_id_by_order_source(
+                run_id=self._storage_run_id,
+                order_id=order_id,
+                source="aggregated_fallback",
+            )
+        target_fill_id = aggregate_fill_id or fill_id
+        existing_fill_id = self._register_fill_keys(fill_id=target_fill_id, keys=keys)
+        if aggregate_fill_id and existing_fill_id is None:
+            existing_fill_id = aggregate_fill_id
+        if existing_fill_id is not None:
+            self._storage.merge_fill_provenance(
+                run_id=self._storage_run_id,
+                fill_id=existing_fill_id,
+                update={
+                    "order_id": order_id,
+                    "source": source,
+                    "provenance_detail": provenance_detail,
+                    "source_history": [source],
+                    "is_partial_fill": is_partial_fill,
+                    "partial_fill_group_key": partial_fill_group_key or self._partial_fill_group_key(order_id),
+                    "is_reconciled": is_reconciled,
+                    "reconciled_from_missing_ws": reconciled_from_missing_ws,
+                    "trade_query_available": trade_query_available,
+                    "trade_query_attempted": trade_query_attempted,
+                },
+            )
+            return False
+        self._storage.save_fill(
+            {
+                "run_id": self._storage_run_id,
+                "symbol": symbol,
+                "fill_id": fill_id,
+                "order_id": order_id,
+                "ts": ts,
+                "side": side,
+                "qty": fill_qty,
+                "price": fill_price,
+                "fee": fee,
+                "liquidity": liquidity,
+                "source": source,
+                "provenance_detail": provenance_detail,
+                "source_history": [source],
+                "is_partial_fill": is_partial_fill,
+                "partial_fill_group_key": partial_fill_group_key or self._partial_fill_group_key(order_id),
+                "is_reconciled": is_reconciled,
+                "reconciled_from_missing_ws": reconciled_from_missing_ws,
+                "trade_query_available": trade_query_available,
+                "trade_query_attempted": trade_query_attempted,
+            }
+        )
+        return True
+
     def _save_ws_fill(
         self,
         *,
         payload: dict[str, Any],
+        symbol: str | None,
         order_id: str,
         side: str,
         fill_qty: float,
@@ -1276,6 +1414,8 @@ class LiveBinanceBroker(Broker):
         fee: float,
         trade_key: str,
         liquidity: str,
+        alias_keys: set[str] | None = None,
+        is_partial_fill: bool = False,
     ) -> None:
         if self._storage is None or self._storage_run_id is None:
             return
@@ -1283,19 +1423,194 @@ class LiveBinanceBroker(Broker):
         event_time = None
         if isinstance(event_order, dict):
             event_time = event_order.get("T")
-        self._storage.save_fill(
-            {
-                "run_id": self._storage_run_id,
-                "fill_id": f"{self._storage_run_id}-{order_id}-{trade_key}",
-                "order_id": order_id,
-                "ts": str(pd_timestamp_from_ms(event_time or payload.get("E") or 0)),
-                "side": side,
-                "qty": fill_qty,
-                "price": fill_price,
-                "fee": fee,
-                "liquidity": liquidity,
-            }
+        self._save_fill_record(
+            fill_id=f"{self._storage_run_id}-{order_id}-{trade_key}",
+            symbol=symbol,
+            order_id=order_id,
+            ts=str(pd_timestamp_from_ms(event_time or payload.get("E") or 0)),
+            side=side,
+            fill_qty=fill_qty,
+            fill_price=fill_price,
+            fee=fee,
+            liquidity=liquidity,
+            alias_keys=alias_keys,
+            source="user_stream",
+            provenance_detail="ws_order_trade_update",
+            is_partial_fill=is_partial_fill,
         )
+
+    def _fetch_order_trades_via_futures_private_api(self, *, order_id: str, symbol: str) -> list[dict[str, Any]] | None:
+        method_names = ("fapiPrivateGetUserTrades", "fapiprivateGetUserTrades", "fapiprivate_get_usertrades")
+        method = None
+        for name in method_names:
+            candidate = getattr(self.exchange, name, None)
+            if callable(candidate):
+                method = candidate
+                break
+        if method is None:
+            return None
+        raw = method({"symbol": self._market_symbol_key(symbol), "orderId": order_id})
+        if not isinstance(raw, list):
+            return []
+        rows: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            buyer_flag = item.get("buyer")
+            side = item.get("side")
+            if not side and isinstance(buyer_flag, bool):
+                side = "BUY" if buyer_flag else "SELL"
+            rows.append(
+                {
+                    "id": item.get("id"),
+                    "timestamp": item.get("time"),
+                    "side": side,
+                    "amount": self._as_float(item.get("qty", item.get("amount", 0.0))),
+                    "price": self._as_float(item.get("price", 0.0)),
+                    "fee": {"cost": self._as_float(item.get("commission", 0.0))},
+                    "maker": bool(item.get("maker", False)),
+                    "info": item,
+                }
+            )
+        return rows
+
+    def _retry_fetch_order_trades(self, *, order_id: str, symbol: str) -> dict[str, Any]:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                direct = self._fetch_order_trades_via_futures_private_api(order_id=order_id, symbol=symbol)
+                if direct is not None:
+                    return {"rows": direct, "available": True, "attempted": True, "source": "futures_private_user_trades"}
+                fetch_my_trades = getattr(self.exchange, "fetch_my_trades", None)
+                if not callable(fetch_my_trades):
+                    return {"rows": [], "available": False, "attempted": False, "source": "fetch_my_trades_unavailable"}
+                rows = fetch_my_trades(symbol, None, None, {"type": "future", "orderId": order_id})
+                return {
+                    "rows": rows if isinstance(rows, list) else [],
+                    "available": True,
+                    "attempted": True,
+                    "source": "fetch_my_trades",
+                }
+            except (ccxt.NetworkError, ccxt.RequestTimeout):
+                if attempt >= self.max_retries:
+                    return {"rows": [], "available": False, "attempted": True, "source": "trade_query_timeout"}
+                time.sleep(self.retry_delay_sec)
+            except Exception:
+                return {"rows": [], "available": False, "attempted": True, "source": "trade_query_error"}
+
+    def _persist_rest_fill_reconciliation(
+        self,
+        *,
+        symbol: str,
+        order_id: str,
+        side: str,
+        filled_qty: float,
+        avg_price: float,
+        fee: float,
+    ) -> int:
+        if self._storage is None or self._storage_run_id is None:
+            return 0
+        side_up = self._normalize_side(side)
+        if filled_qty <= 0 or avg_price <= 0:
+            return 0
+        reconciled = 0
+        trade_query = self._retry_fetch_order_trades(order_id=order_id, symbol=symbol)
+        trades = trade_query.get("rows", [])
+        trade_query_available = bool(trade_query.get("available", False))
+        trade_query_attempted = bool(trade_query.get("attempted", False))
+        partial_fill_group_key = self._partial_fill_group_key(order_id)
+        normalized_trades: list[dict[str, Any]] = []
+        for trade in trades:
+            if not isinstance(trade, dict):
+                continue
+            trade_qty = self._as_float(trade.get("amount", trade.get("qty", 0.0)))
+            trade_price = self._as_float(trade.get("price", 0.0))
+            if trade_qty <= 0 or trade_price <= 0:
+                continue
+            normalized_trades.append(trade)
+        for trade in normalized_trades:
+            trade_qty = self._as_float(trade.get("amount", trade.get("qty", 0.0)))
+            trade_price = self._as_float(trade.get("price", 0.0))
+            if trade_qty <= 0 or trade_price <= 0:
+                continue
+            trade_side = str(trade.get("side") or side_up).upper()
+            trade_id = str(trade.get("id", "") or "")
+            trade_time = trade.get("timestamp")
+            fee_obj = trade.get("fee") or {}
+            trade_fee = self._as_float(fee_obj.get("cost") if isinstance(fee_obj, dict) else 0.0)
+            if trade_fee <= 0:
+                info = trade.get("info")
+                if isinstance(info, dict):
+                    trade_fee = self._as_float(info.get("commission", 0.0))
+            trade_key = trade_id if trade_id and trade_id != "-1" else (
+                f"{int(trade_time)}:{trade_qty:.12f}:{trade_price:.12f}:{trade_side}"
+                if trade_time is not None
+                else f"rest:{trade_qty:.12f}:{trade_price:.12f}:{trade_side}"
+            )
+            saved = self._save_fill_record(
+                fill_id=f"{self._storage_run_id}-{order_id}-{trade_key}",
+                symbol=symbol,
+                order_id=order_id,
+                ts=str(pd_timestamp_from_ms(trade_time or 0)),
+                side=trade_side,
+                fill_qty=trade_qty,
+                fill_price=trade_price,
+                fee=trade_fee,
+                liquidity="maker" if bool(trade.get("maker", False)) else "taker",
+                source="rest_trade_reconcile",
+                provenance_detail="rest_trade_query",
+                is_partial_fill=len(normalized_trades) > 1,
+                partial_fill_group_key=partial_fill_group_key,
+                is_reconciled=True,
+                reconciled_from_missing_ws=True,
+                trade_query_available=trade_query_available,
+                trade_query_attempted=trade_query_attempted,
+                alias_keys=self._fill_alias_keys(
+                    order_id=order_id,
+                    side=trade_side,
+                    fill_qty=trade_qty,
+                    fill_price=trade_price,
+                    trade_id=trade_id or None,
+                    trade_time=trade_time,
+                ),
+            )
+            if saved:
+                reconciled += 1
+        if reconciled > 0:
+            return reconciled
+        if hasattr(self._storage, "count_fills_for_order") and self._storage.count_fills_for_order(
+            run_id=self._storage_run_id,
+            order_id=order_id,
+        ) > 0:
+            return 0
+        fallback_alias = self._fill_alias_keys(
+            order_id=order_id,
+            side=side_up,
+            fill_qty=filled_qty,
+            fill_price=avg_price,
+        )
+        fallback_detail = "trade_query_empty" if trade_query_available else "trade_query_unavailable"
+        saved = self._save_fill_record(
+            fill_id=f"{self._storage_run_id}-{order_id}-rest:{side_up}:{filled_qty:.12f}:{avg_price:.12f}",
+            symbol=symbol,
+            order_id=order_id,
+            ts=str(pd_timestamp_from_ms(0)),
+            side=side_up,
+            fill_qty=filled_qty,
+            fill_price=avg_price,
+            fee=fee,
+            liquidity="taker",
+            alias_keys=fallback_alias,
+            source="aggregated_fallback",
+            provenance_detail=fallback_detail,
+            partial_fill_group_key=partial_fill_group_key,
+            is_reconciled=True,
+            reconciled_from_missing_ws=True,
+            trade_query_available=trade_query_available,
+            trade_query_attempted=trade_query_attempted,
+        )
+        return 1 if saved else 0
 
     def _handle_order_trade_update(self, payload: dict[str, Any]) -> None:
         order_data = payload.get("o")
@@ -1349,18 +1664,15 @@ class LiveBinanceBroker(Broker):
         fill_price = self._as_float(order_data.get("L", 0.0))
         trade_id = order_data.get("t")
         trade_key = str(trade_id) if trade_id is not None and str(trade_id) != "-1" else ""
+        trade_time = order_data.get("T") or payload.get("E") or 0
         if not trade_key:
-            trade_time = order_data.get("T") or payload.get("E") or 0
             trade_key = f"{trade_time}:{fill_qty:.12f}:{fill_price:.12f}:{side}"
 
-        with self._lock:
-            if trade_key in self._seen_fill_keys:
-                return
-            self._seen_fill_keys.add(trade_key)
-
         liquidity = "maker" if bool(order_data.get("m", False)) else "taker"
+        cumulative_qty = self._as_float(order_data.get("z", fill_qty))
         self._save_ws_fill(
             payload=payload,
+            symbol=str(order_data.get("s", "")) or None,
             order_id=order_id,
             side=side,
             fill_qty=fill_qty,
@@ -1368,6 +1680,15 @@ class LiveBinanceBroker(Broker):
             fee=fee,
             trade_key=trade_key,
             liquidity=liquidity,
+            alias_keys=self._fill_alias_keys(
+                order_id=order_id,
+                side=side,
+                fill_qty=fill_qty,
+                fill_price=fill_price,
+                trade_id=str(trade_id) if trade_id is not None else None,
+                trade_time=trade_time,
+            ),
+            is_partial_fill=(cumulative_qty - fill_qty) > 1e-12 or raw_status.upper() == "PARTIALLY_FILLED",
         )
 
     def _handle_account_update(self, payload: dict[str, Any]) -> None:
@@ -1651,7 +1972,6 @@ class LiveBinanceBroker(Broker):
         params: dict[str, Any] = {}
         if prepared.client_order_id:
             params["newClientOrderId"] = prepared.client_order_id
-            params["clientOrderId"] = prepared.client_order_id
         if prepared.reduce_only:
             params["reduceOnly"] = True
         if prepared.stop_price is not None:
@@ -1684,7 +2004,13 @@ class LiveBinanceBroker(Broker):
             client_order_id=prepared.client_order_id,
         )
 
-        if self.use_user_stream and prepared.client_order_id:
+        normalized_order_type = self._normalize_order_type(prepared.order_type)
+
+        if self.use_user_stream and prepared.client_order_id and normalized_order_type in {"STOP_MARKET", "TAKE_PROFIT_MARKET"}:
+            # Protective trigger orders should remain open after creation; waiting for a
+            # terminal user-stream status turns a healthy NEW order into a false failure.
+            pass
+        elif self.use_user_stream and prepared.client_order_id:
             ws_result = self._wait_for_terminal_ws_status(
                 client_order_id=prepared.client_order_id,
                 order_id=result.order_id,
@@ -1703,7 +2029,7 @@ class LiveBinanceBroker(Broker):
                     raise RuntimeError(
                         "No terminal order status from user stream and fallback REST check was inconclusive"
                     )
-        elif result.status == "NEW" and self._normalize_order_type(prepared.order_type) in {"MARKET", "LIMIT"}:
+        elif result.status == "NEW" and normalized_order_type in {"MARKET", "LIMIT"}:
             polled = self._wait_for_terminal_rest_status(
                 order_id=result.order_id,
                 symbol=prepared.symbol,
@@ -1711,6 +2037,28 @@ class LiveBinanceBroker(Broker):
             )
             if polled is not None:
                 result = polled
+
+        if self.use_user_stream and str(result.status).upper() == "FILLED":
+            recovered = self._persist_rest_fill_reconciliation(
+                symbol=prepared.symbol,
+                order_id=result.order_id,
+                side=prepared.side,
+                filled_qty=self._as_float(result.filled_qty),
+                avg_price=self._as_float(result.avg_price),
+                fee=self._as_float(result.fee),
+            )
+            if recovered > 0:
+                self._write_event(
+                    "rest_fill_reconciled",
+                    {
+                        "order_id": result.order_id,
+                        "symbol": prepared.symbol,
+                        "side": self._normalize_side(prepared.side),
+                        "fill_count": recovered,
+                        "filled_qty": self._as_float(result.filled_qty),
+                        "avg_price": self._as_float(result.avg_price),
+                    },
+                )
 
         self._apply_local_position_fill(request=prepared, result=result)
         if prepared.client_order_id:

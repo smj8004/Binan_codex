@@ -186,6 +186,53 @@ It does NOT validate strategy edge (use historical research for that).
 
 See "Live Runtime (Safety First)" section below for operational validation commands.
 
+### Fixed MACD Candidate Operational Validation
+
+Current fixed operational candidate:
+- `strategy=macd_final_candidate`
+- underlying strategy: `macd @ 4h`
+- fixed params: `fast=12`, `slow=26`, `signal=9`
+- tightened trend regime gating is baked into the runtime profile
+
+Operational validation is execution validation, not a new research sweep.
+Keep the candidate frozen and start with `BTC/USDT,ETH/USDT,BNB/USDT` only.
+Expand to the full 14-symbol universe only after the 3-symbol paper/testnet path is stable.
+
+Recommended commands:
+
+```powershell
+uv run --active trader doctor --env testnet
+powershell -ExecutionPolicy Bypass -File scripts/run_macd_final_candidate_paper.ps1
+powershell -ExecutionPolicy Bypass -File scripts/run_macd_final_candidate_testnet.ps1
+```
+
+Artifacts are written to:
+- `out/operational_validation/macd_final_candidate_paper/`
+- `out/operational_validation/macd_final_candidate_testnet/`
+
+Latest sequential validation rerun on `2026-03-15`:
+- validation-only runner overrides are now explicit:
+  - `MAX_ATR_PCT=1.0` only inside the MACD final candidate wrappers
+  - validation probe enabled to force one controlled entry/exit cycle without changing strategy params
+  - capped wrappers now default to `60` bars because probe entry starts at bar `40` and exit/cleanup completes shortly after
+- `paper`: `PASS`
+  - `run_id=02cb93cac04b4cc292efd8477a72d029`
+  - fixed params loaded: `true`
+  - orders/fills/trades: `15/6/3`
+  - protective orders created: `3`
+  - symbols halted: `0`
+- `testnet`: `PASS`
+  - `run_id=34a511fc12dc4261b2db899c9ceaf97b`
+  - fixed params loaded: `true`
+  - orders/fills/trades: `18/0/3`
+  - protective orders created: `3`
+  - symbols halted: `0`
+  - `user_stream_no_running_event_loop_count=0`
+- remaining runtime caveat:
+  - raw testnet logs still show Binance testnet user-stream DNS reconnect churn (`Could not contact DNS servers`)
+  - order/protective/state sync validation now completes despite that churn, but DB `fills` remain `0` on live/testnet because fill persistence still depends on user-stream delivery
+- keep the fixed candidate frozen; this stage is runtime validation only, not a reason to reopen MACD research
+
 ## Edge Validation Experiments (Cost / Walk-forward / Regime)
 
 Run the unified scientific validation suite:
@@ -430,6 +477,29 @@ powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_6h.ps1
 16-hour wall-clock durability runner (1-line):
 - `powershell -ExecutionPolicy Bypass -File scripts/run_live_forward_16h.ps1`
 
+3-symbol fixed-candidate long-run testnet runner:
+- `powershell -ExecutionPolicy Bypass -File scripts/run_macd_final_candidate_testnet_long.ps1`
+- fixed scope:
+  - `strategy=macd_final_candidate`
+  - `timeframe=4h`
+  - `symbols=BTC/USDT,ETH/USDT,BNB/USDT`
+  - `fast=12 slow=26 signal=9`
+  - tightened regime via preset `macd_final_candidate_ops`
+- latest result:
+  - verdict `FAIL` for the shortened startup-check rerun, but the startup blocker itself is removed
+  - artifact dir `out/operational_validation/macd_final_candidate_testnet_long/`
+  - fresh `run_id=301a138e8d1e49aa9462eea7b02507af`
+  - `startup_stalled_before_run_id=false`
+  - `whether_fixed_params_loaded=true`
+  - `startup_phase=status_written`
+  - `user_stream_disconnect_count=19`
+  - `user_stream_dns_reconnect_count=19`
+  - `orders/fills/trades=0/0/0`
+  - implication:
+    - root cause was a startup detection bug, not a fixed-profile wiring failure
+    - the runner now sees a fresh testnet runtime before the first bar
+    - a true 12h unattended verdict still needs a follow-up run because this startup-check rerun was intentionally stopped after startup recovery was confirmed
+
 ## Live Entry Sizing Guard (Cap + Floor)
 
 - `max_position_notional_usdt` default: `4000.0`
@@ -636,3 +706,53 @@ Protective orders are strongly recommended for live:
 9. Use `trader status --latest` during operations and after restart.
 10. Move to mainnet with minimal notional first, then scale gradually.
 
+## 2026-03-15 Reconciliation Validation Status
+
+Latest usable 3-symbol operational validation after the reconciliation/accounting work:
+
+- fixed candidate stayed frozen:
+  - `strategy=macd_final_candidate`
+  - `timeframe=4h`
+  - `fast=12`
+  - `slow=26`
+  - `signal=9`
+  - tightened regime unchanged
+- paper:
+  - `run_id=185d99c7961f4681a49b8f18fe7442fa`
+  - verdict `PASS`
+  - orders/fills/trades `11/6/3`
+  - `fills_accounted_count=6`
+  - `fill_provenance_breakdown={"by_source":{"direct_runtime":6},"fills_reconciled_count":0,"fills_with_source_history_count":0}`
+  - `accounting_consistency_pass=true`
+  - protective orders created `3`
+- testnet:
+  - `run_id=392e3990ee3547ee8c30a98f7f0356b8`
+  - verdict `PASS`
+  - orders/fills/trades `12/8/3`
+  - `fills_accounted_count=8`
+  - `fills_reconciled_count=8`
+  - `fills_from_rest_reconcile_count=8`
+  - `fills_from_aggregated_fallback_count=0`
+  - `partial_fills_count=4`
+  - `reconciled_missing_ws_fill_count=8`
+  - `trade_query_unavailable_count=0`
+  - `fill_provenance_breakdown={"by_source":{"rest_trade_reconcile":8},"fills_reconciled_count":8,"fills_with_source_history_count":0}`
+  - `partial_fill_audit_summary={"partial_fill_groups_count":2,"partial_fill_rows_count":4,"aggregated_fallback_fill_count":0,"reconciled_missing_ws_fill_count":8,"trade_query_unavailable_count":0,"fills_with_multiple_source_history_count":0}`
+  - `accounting_consistency_pass=true`
+  - protective orders created `3`
+  - user-stream DNS reconnect churn observed `14` times
+  - runtime still completed with positions flat and open orders `0`
+
+Operational read:
+
+- the previous `DB fills=0` symptom is resolved on the latest testnet rerun
+- summary counts now use distinct ids and match `trader status --latest`
+- degraded user-stream conditions no longer prevent fill/accounting recovery when REST reconciliation succeeds
+- summary/DB/status now expose which fills were recorded as `user_stream`, `rest_trade_reconcile`, `aggregated_fallback`, or `direct_runtime`
+- partial-fill audit now shows how many fills were decomposed exactly vs recovered without aggregate fallback
+
+Remaining risk:
+
+- no blocker remains on fill/accounting observability for the validated path
+- aggregate fallback is now observable when it happens; on the latest usable testnet rerun it stayed at `0`
+- residual risk is precision-only: future degraded runs can still show `trade_query_unavailable_count > 0`, but that is now explicit in summary/DB/status rather than silent

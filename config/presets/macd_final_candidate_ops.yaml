@@ -1,0 +1,16 @@
+account_allocation_pct: 0.10
+max_position_notional_usdt: 1000.0
+min_entry_notional_usdt: 250.0
+risk_per_trade_pct: 0.005
+daily_loss_limit_pct: 0.02
+max_drawdown_pct: 0.10
+enable_protective_orders: true
+require_protective_orders: true
+protective_missing_policy: halt
+sl_mode: pct
+sl_pct: 0.01
+tp_mode: pct
+tp_pct: 0.02
+heartbeat_enabled: true
+heartbeat_interval_minutes: 30
+use_user_stream: true

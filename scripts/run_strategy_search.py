@@ -26,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--step-days", type=int, default=60, help="Walk-forward step in days")
     parser.add_argument("--taker-fee-bps", type=float, default=5.0, help="Taker fee in basis points")
     parser.add_argument("--slippage-bps", type=float, default=2.0, help="Fixed slippage in basis points")
+    parser.add_argument("--taker-fee-multiplier", type=float, default=1.0, help="Optional multiplier applied to taker fee bps")
+    parser.add_argument("--slippage-multiplier", type=float, default=1.0, help="Optional multiplier applied to slippage bps")
     parser.add_argument("--initial-equity", type=float, default=10_000.0, help="Initial equity per symbol backtest")
     parser.add_argument("--fixed-notional-usdt", type=float, default=1_000.0, help="Fixed notional per entry")
     parser.add_argument("--min-trade-count", type=int, default=3, help="Minimum trades for train candidate preference")
@@ -44,6 +46,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-budget-hours", type=float, default=6.0, help="Broad-sweep wall-clock budget target")
     parser.add_argument("--max-combos", type=int, help="Optional hard cap on broad-sweep parameter combinations")
     parser.add_argument("--jobs", type=int, help="Process worker count for broad sweep")
+    parser.add_argument(
+        "--regime-mode",
+        choices=["off", "family-default"],
+        default="off",
+        help="Optional regime gating mode for broad-sweep candidates",
+    )
     return parser
 
 
@@ -51,6 +59,8 @@ def main() -> None:
     args = build_parser().parse_args()
     symbols = [str(symbol).upper() for symbol in args.symbols]
     data_root = Path(args.data_root)
+    effective_taker_fee_bps = float(args.taker_fee_bps) * float(args.taker_fee_multiplier)
+    effective_slippage_bps = float(args.slippage_bps) * float(args.slippage_multiplier)
 
     if args.mode == "broad-sweep":
         intervals = tuple(args.intervals) if args.intervals else ("1h", "4h")
@@ -60,8 +70,8 @@ def main() -> None:
             out_root=Path(args.out_root) if args.out_root else Path("out/strategy_search_matrix"),
             initial_equity=args.initial_equity,
             fixed_notional_usdt=args.fixed_notional_usdt,
-            taker_fee_bps=args.taker_fee_bps,
-            slippage_bps=args.slippage_bps,
+            taker_fee_bps=effective_taker_fee_bps,
+            slippage_bps=effective_slippage_bps,
             train_days=args.train_days,
             test_days=args.test_days,
             step_days=args.step_days,
@@ -70,6 +80,7 @@ def main() -> None:
             max_combos=args.max_combos if args.max_combos is not None else BroadSweepConfig().max_combos,
             time_budget_hours=args.time_budget_hours,
             jobs=args.jobs if args.jobs is not None else BroadSweepConfig().jobs,
+            regime_mode=args.regime_mode,
         )
         result = run_broad_sweep(symbols=symbols, config=config)
         print("\n=== BROAD SWEEP RESULTS ===")
@@ -111,8 +122,8 @@ def main() -> None:
         out_root=Path(args.out_root) if args.out_root else Path("out/strategy_search"),
         initial_equity=args.initial_equity,
         fixed_notional_usdt=args.fixed_notional_usdt,
-        taker_fee_bps=args.taker_fee_bps,
-        slippage_bps=args.slippage_bps,
+        taker_fee_bps=effective_taker_fee_bps,
+        slippage_bps=effective_slippage_bps,
         train_days=args.train_days,
         test_days=args.test_days,
         step_days=args.step_days,

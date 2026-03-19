@@ -226,3 +226,82 @@ def test_protective_algo_limit_retries_after_cleanup(tmp_path) -> None:
         assert len(protective_calls) >= 3  # first failure + retry + sibling order
     finally:
         storage.close()
+
+
+def test_trade_ids_are_unique_across_symbols_for_shared_run(tmp_path) -> None:
+    storage = SQLiteStorage(tmp_path / "shared_run_trade_ids.db")
+    try:
+        shared_run_id = "shared-run"
+        broker = AlgoLimitRecoveryBroker()
+        engine_btc = RuntimeEngine(
+            config=RuntimeConfig(
+                mode="paper",
+                symbol="BTC/USDT",
+                timeframe="1m",
+                fixed_notional_usdt=100.0,
+                enable_protective_orders=False,
+                budget_guard_enabled=False,
+                binance_env="testnet",
+            ),
+            strategy=AlwaysLongStrategy(),
+            broker=broker,  # type: ignore[arg-type]
+            feed=SingleBarFeed(symbol="BTC/USDT"),  # type: ignore[arg-type]
+            storage=storage,
+            risk_guard=_risk_guard(),
+            notifier=Notifier(),
+            initial_equity=10_000.0,
+            run_id=shared_run_id,
+        )
+        engine_eth = RuntimeEngine(
+            config=RuntimeConfig(
+                mode="paper",
+                symbol="ETH/USDT",
+                timeframe="1m",
+                fixed_notional_usdt=100.0,
+                enable_protective_orders=False,
+                budget_guard_enabled=False,
+                binance_env="testnet",
+            ),
+            strategy=AlwaysLongStrategy(),
+            broker=broker,  # type: ignore[arg-type]
+            feed=SingleBarFeed(symbol="ETH/USDT"),  # type: ignore[arg-type]
+            storage=storage,
+            risk_guard=_risk_guard(),
+            notifier=Notifier(),
+            initial_equity=10_000.0,
+            run_id=shared_run_id,
+        )
+
+        engine_btc._record_trade(
+            side="long",
+            entry_ts="2026-01-01T00:00:00+00:00",
+            exit_ts="2026-01-01T01:00:00+00:00",
+            qty=1.0,
+            entry_price=100.0,
+            exit_price=101.0,
+            gross_pnl=1.0,
+            fee_paid=0.1,
+            reason="btc-test",
+        )
+        engine_eth._record_trade(
+            side="long",
+            entry_ts="2026-01-01T00:00:00+00:00",
+            exit_ts="2026-01-01T01:00:00+00:00",
+            qty=1.0,
+            entry_price=100.0,
+            exit_price=101.0,
+            gross_pnl=1.0,
+            fee_paid=0.1,
+            reason="eth-test",
+        )
+
+        rows = storage._conn.execute(
+            "SELECT trade_id, symbol FROM trades WHERE run_id = ? ORDER BY symbol",
+            (shared_run_id,),
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]["trade_id"] != rows[1]["trade_id"]
+        assert "btcusdt" in str(rows[0]["trade_id"]) or "btcusdt" in str(rows[1]["trade_id"])
+        assert "ethusdt" in str(rows[0]["trade_id"]) or "ethusdt" in str(rows[1]["trade_id"])
+    finally:
+        storage.close()

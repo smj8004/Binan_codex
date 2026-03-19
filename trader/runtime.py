@@ -5,7 +5,7 @@ import math
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import uuid4
@@ -85,6 +85,13 @@ class RuntimeConfig:
     heartbeat_enabled: bool = False
     heartbeat_interval_minutes: int = 30
     protective_integrity_retries: int = 2
+    strategy_name: str = ""
+    strategy_params: dict[str, Any] = field(default_factory=dict)
+    candidate_profile: str | None = None
+    validation_probe_enabled: bool = False
+    validation_probe_entry_after_bars: int = 0
+    validation_probe_exit_after_bars: int = 0
+    validation_allow_live_backfill_execution: bool = False
 
 
 class AccountBudgetGuard:
@@ -315,6 +322,9 @@ class RuntimeEngine:
         self._session_processed = 0
         self._last_processed_bar_ts: pd.Timestamp | None = None
         self._last_bar_recv_monotonic: float | None = None
+        self._validation_probe_entry_sent = False
+        self._validation_probe_exit_sent = False
+        self._validation_probe_position_open_bar: int | None = None
         if self.budget_guard is None and self.config.mode == "live" and self.config.budget_guard_enabled:
             self.budget_guard = AccountBudgetGuard(broker=self.broker)
 
@@ -377,6 +387,9 @@ class RuntimeEngine:
             "mode": self.config.mode,
             "symbol": self.config.symbol,
             "timeframe": self.config.timeframe,
+            "strategy": self.config.strategy_name,
+            "strategy_params": dict(self.config.strategy_params),
+            "candidate_profile": self.config.candidate_profile,
             "broker": self._broker_label(),
             "env": self.config.binance_env,
             "live_trading": self.config.live_trading_enabled,
@@ -837,12 +850,13 @@ class RuntimeEngine:
         )
 
     def _save_fill(self, bar: LiveBar, request: OrderRequest, result: OrderResult) -> None:
+        order_id = result.order_id
         self.storage.save_fill(
             {
                 "run_id": self.run_id,
                 "symbol": self.config.symbol,
-                "fill_id": f"{self.run_id}-fill-{result.order_id}",
-                "order_id": result.order_id,
+                "fill_id": f"{self.run_id}-fill-{order_id}",
+                "order_id": order_id,
                 "ts": str(bar.timestamp),
                 "side": str(request.side).upper(),
                 "qty": result.filled_qty,
@@ -851,6 +865,14 @@ class RuntimeEngine:
                 "liquidity": "taker"
                 if str(request.order_type).upper() in {"MARKET", "STOP_MARKET", "TAKE_PROFIT_MARKET"}
                 else "maker",
+                "source": "direct_runtime",
+                "provenance_detail": "runtime_saved_fill",
+                "source_history": ["direct_runtime"],
+                "partial_fill_group_key": f"{self.run_id}:{order_id}",
+                "is_reconciled": False,
+                "reconciled_from_missing_ws": False,
+                "trade_query_available": None,
+                "trade_query_attempted": False,
             }
         )
 
@@ -871,10 +893,11 @@ class RuntimeEngine:
         notional = abs(qty * entry_price)
         net_pnl = gross_pnl - fee_paid
         return_pct = net_pnl / notional if notional > 0 else 0.0
+        symbol_key = self.config.symbol.replace("/", "").lower()
         self.storage.save_trade(
             {
                 "run_id": self.run_id,
-                "trade_id": f"{self.run_id}-rt-{self._trade_seq:06d}",
+                "trade_id": f"{self.run_id}-{symbol_key}-rt-{self._trade_seq:06d}",
                 "symbol": self.config.symbol,
                 "side": side,
                 "entry_ts": entry_ts,
@@ -1892,6 +1915,53 @@ class RuntimeEngine:
             f"open_protective={len(self._open_orders)} halted={self.halted}"
         )
 
+    def _maybe_apply_validation_probe(self, *, bar: LiveBar, signal: Signal) -> tuple[Signal, bool]:
+        if not self.config.validation_probe_enabled:
+            return signal, False
+
+        current_bar_index = self._processed_bars + 1
+        entry_after = max(int(self.config.validation_probe_entry_after_bars), 1)
+        exit_after = max(int(self.config.validation_probe_exit_after_bars), 1)
+
+        if not self._validation_probe_entry_sent and self._position_side() == "flat" and current_bar_index >= entry_after:
+            self._validation_probe_entry_sent = True
+            self._event(
+                "validation_probe_signal_override",
+                {
+                    "phase": "entry",
+                    "from": signal,
+                    "to": "long",
+                    "bar_ts": str(bar.timestamp),
+                    "is_backfill": bool(getattr(bar, "is_backfill", False)),
+                },
+            )
+            return "long", True
+
+        if self._position_side() != "flat" and self._validation_probe_position_open_bar is None:
+            self._validation_probe_position_open_bar = current_bar_index
+
+        if (
+            self._validation_probe_entry_sent
+            and not self._validation_probe_exit_sent
+            and self._position_side() != "flat"
+            and self._validation_probe_position_open_bar is not None
+            and (current_bar_index - self._validation_probe_position_open_bar) >= exit_after
+        ):
+            self._validation_probe_exit_sent = True
+            self._event(
+                "validation_probe_signal_override",
+                {
+                    "phase": "exit",
+                    "from": signal,
+                    "to": "exit",
+                    "bar_ts": str(bar.timestamp),
+                    "is_backfill": bool(getattr(bar, "is_backfill", False)),
+                },
+            )
+            return "exit", True
+
+        return signal, False
+
     def _restore_runtime_state(self) -> None:
         resume_state = None
         if self.config.resume_run_id:
@@ -2017,6 +2087,9 @@ class RuntimeEngine:
             "equity": equity,
             "drawdown_pct": drawdown,
             "broker": self._broker_label(),
+            "strategy": self.config.strategy_name,
+            "strategy_params": dict(self.config.strategy_params),
+            "candidate_profile": self.config.candidate_profile,
             "budget_cap_usdt": budget_cap_usdt,
             "budget_usdt": budget_cap_usdt,
             "budget_cap_remaining_usdt": budget_cap_remaining_usdt,
@@ -2188,6 +2261,9 @@ class RuntimeEngine:
         profile = self._runtime_profile_payload()
         self._event("runtime_started", profile)
         self._event("runtime_profile", profile)
+        # Persist an initial row before the first bar so fresh run_id detection
+        # does not depend on bar timing for long-interval websocket sessions.
+        self._save_runtime_state(last_bar_ts=self._resume_last_bar_ts)
         if self.config.mode == "live":
             self._run_preflight_checks()
 
@@ -2263,8 +2339,27 @@ class RuntimeEngine:
                     position=strategy_position,
                 )
             )
+            signal, validation_probe_applied = self._maybe_apply_validation_probe(bar=bar, signal=signal)
             self.last_signal = signal
-            if not self.halted:
+            if self.config.mode == "live" and bool(getattr(bar, "is_backfill", False)):
+                allow_live_backfill_execution = bool(
+                    validation_probe_applied and self.config.validation_allow_live_backfill_execution
+                )
+                if signal != "hold" and not allow_live_backfill_execution:
+                    self._event(
+                        "live_backfill_signal_suppressed",
+                        {
+                            "signal": signal,
+                            "bar_ts": str(bar_ts),
+                            "candidate_profile": self.config.candidate_profile,
+                        },
+                    )
+                elif not self.halted:
+                    self._handle_signal(bar, signal)
+                    self._maybe_update_trailing_stop(bar=bar)
+                    self._enforce_protective_integrity(bar=bar)
+                    self._maybe_send_heartbeat(bar=bar)
+            elif not self.halted:
                 self._handle_signal(bar, signal)
                 self._maybe_update_trailing_stop(bar=bar)
                 self._enforce_protective_integrity(bar=bar)

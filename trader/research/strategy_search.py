@@ -35,6 +35,8 @@ SUPPORTED_FAMILIES = (
     "macd",
     "stoch_rsi",
 )
+TREND_FAMILIES = frozenset({"ema_cross", "donchian_breakout", "supertrend", "price_adx_breakout", "macd"})
+MEAN_REVERSION_FAMILIES = frozenset({"rsi_mean_reversion", "bollinger", "stoch_rsi"})
 
 
 def _timeframe_seconds(timeframe: str) -> int:
@@ -621,6 +623,137 @@ class StochRSIHybridStrategy(Strategy):
         return signal
 
 
+class RegimeConditionedStrategy(Strategy):
+    def __init__(
+        self,
+        *,
+        base_strategy: Strategy,
+        allow_long_mask: list[bool],
+        allow_short_mask: list[bool],
+    ) -> None:
+        self.base_strategy = base_strategy
+        self.allow_long_mask = allow_long_mask
+        self.allow_short_mask = allow_short_mask
+        self._index = 0
+
+    def _mask_value(self, values: list[bool]) -> bool:
+        if not values:
+            return False
+        idx = min(self._index, len(values) - 1)
+        return bool(values[idx])
+
+    def on_bar(self, bar: Bar, position: StrategyPosition | None = None) -> str:
+        signal = self.base_strategy.on_bar(bar, position)
+        allow_long = self._mask_value(self.allow_long_mask)
+        allow_short = self._mask_value(self.allow_short_mask)
+        self._index += 1
+
+        if signal in {"hold", "exit"}:
+            return signal
+        if signal in {"long", "buy"}:
+            if allow_long:
+                return signal
+            if position is not None and position.side == "short":
+                return "exit"
+            return "hold"
+        if signal in {"short", "sell"}:
+            if allow_short:
+                return signal
+            if position is not None and position.side == "long":
+                return "exit"
+            return "hold"
+        return signal
+
+
+def _valid_bool_series(values: pd.Series) -> pd.Series:
+    return values.fillna(False).astype(bool)
+
+
+def _precompute_regime_masks(
+    *,
+    candles: pd.DataFrame,
+    interval: str,
+    strategy_family: str,
+    regime_name: str,
+    regime_params: dict[str, Any] | None,
+) -> tuple[list[bool], list[bool], float]:
+    if regime_name == "off" or not regime_params:
+        size = len(candles)
+        return [True] * size, [True] * size, 1.0 if size else 0.0
+
+    closes = candles["close"].astype(float)
+    pct_returns = closes.pct_change()
+
+    adx_window = int(regime_params["adx_window"])
+    low_adx_threshold = float(regime_params["low_adx_threshold"])
+    high_adx_threshold = float(regime_params["high_adx_threshold"])
+    vol_window = int(regime_params["vol_window"])
+    vol_percentile_window = int(regime_params["vol_percentile_window"])
+    low_vol_quantile = float(regime_params["low_vol_quantile"])
+    high_vol_quantile = float(regime_params["high_vol_quantile"])
+    trend_ema_span = int(regime_params["trend_ema_span"])
+    trend_slope_lookback = int(regime_params["trend_slope_lookback"])
+    trend_slope_threshold = float(regime_params["trend_slope_threshold"])
+    trend_distance_threshold = float(regime_params.get("trend_distance_threshold", 0.0))
+
+    adx_series = calculate_adx(candles, window=adx_window)
+    low_adx = _valid_bool_series(adx_series <= low_adx_threshold)
+    high_adx = _valid_bool_series(adx_series >= high_adx_threshold)
+
+    realized_vol = pct_returns.rolling(window=vol_window, min_periods=vol_window).std(ddof=0)
+    low_vol_cut = realized_vol.rolling(window=vol_percentile_window, min_periods=vol_percentile_window).quantile(low_vol_quantile)
+    high_vol_cut = realized_vol.rolling(window=vol_percentile_window, min_periods=vol_percentile_window).quantile(high_vol_quantile)
+    low_vol = _valid_bool_series(realized_vol <= low_vol_cut)
+    high_vol = _valid_bool_series(realized_vol >= high_vol_cut)
+
+    trend_ema = closes.ewm(span=trend_ema_span, adjust=False).mean()
+    slope = trend_ema.pct_change(periods=trend_slope_lookback)
+    ema_distance = ((closes / trend_ema) - 1.0).abs().replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    trend_distance_ok = _valid_bool_series(ema_distance >= trend_distance_threshold)
+    uptrend = _valid_bool_series((closes > trend_ema) & (slope >= trend_slope_threshold) & trend_distance_ok)
+    downtrend = _valid_bool_series((closes < trend_ema) & (slope <= -trend_slope_threshold) & trend_distance_ok)
+    flat = _valid_bool_series(~uptrend & ~downtrend)
+
+    if strategy_family in TREND_FAMILIES:
+        base_mask = _valid_bool_series(high_adx & ~low_vol)
+        allow_long = _valid_bool_series(base_mask & uptrend)
+        allow_short = _valid_bool_series(base_mask & downtrend)
+        coverage_mask = _valid_bool_series(base_mask & (uptrend | downtrend))
+    elif strategy_family in MEAN_REVERSION_FAMILIES:
+        base_mask = _valid_bool_series(low_adx & low_vol & flat)
+        allow_long = base_mask.copy()
+        allow_short = base_mask.copy()
+        coverage_mask = base_mask.copy()
+    else:
+        size = len(candles)
+        return [True] * size, [True] * size, 1.0 if size else 0.0
+
+    coverage_ratio = float(coverage_mask.mean()) if len(coverage_mask) else 0.0
+    return allow_long.tolist(), allow_short.tolist(), coverage_ratio
+
+
+def _default_regime_spec(strategy_family: str, _interval: str) -> _RegimeSpec:
+    params = {
+        "adx_window": 14,
+        "low_adx_threshold": 18.0,
+        "high_adx_threshold": 30.0,
+        "vol_window": 20,
+        "vol_percentile_window": 160,
+        "low_vol_quantile": 0.20,
+        "high_vol_quantile": 0.80,
+        "trend_ema_span": 100,
+        "trend_slope_lookback": 16,
+        "trend_slope_threshold": 0.0030,
+        "trend_distance_threshold": 0.0050,
+        "min_coverage_ratio": 0.20,
+    }
+    if strategy_family in TREND_FAMILIES:
+        return _RegimeSpec(name="trend_tight_high_adx_extreme_vol_strict_trend", params=params)
+    if strategy_family in MEAN_REVERSION_FAMILIES:
+        return _RegimeSpec(name="meanrev_tight_low_adx_extreme_low_vol_flat", params=params)
+    return _RegimeSpec(name="off", params={})
+
+
 @dataclass(frozen=True)
 class StrategySearchConfig:
     interval: str = "1h"
@@ -665,6 +798,7 @@ class BroadSweepConfig:
     max_combos: int | None = 96
     time_budget_hours: float = 6.0
     jobs: int = max(1, min(os.cpu_count() or 1, 8))
+    regime_mode: str = "off"
 
 
 @dataclass(frozen=True)
@@ -694,6 +828,14 @@ class _Window:
 class _BroadCandidate:
     strategy_family: str
     strategy_name: str
+    params: dict[str, Any]
+    regime_name: str = "off"
+    regime_params: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _RegimeSpec:
+    name: str
     params: dict[str, Any]
 
 
@@ -818,6 +960,13 @@ def _resolve_family_names(families: tuple[str, ...] | None) -> list[str]:
     return normalized
 
 
+def _resolve_regime_mode(mode: str | None) -> str:
+    normalized = str(mode or "off").strip().lower()
+    if normalized not in {"off", "family-default"}:
+        raise ValueError("Unsupported regime_mode. Expected one of: off, family-default")
+    return normalized
+
+
 def _strategy_grid(strategies: tuple[str, ...] | None = None) -> dict[str, list[dict[str, Any]]]:
     selected = _resolve_strategy_names(strategies)
     grids: dict[str, list[dict[str, Any]]] = {name: [] for name in selected}
@@ -887,8 +1036,14 @@ def _strategy_grid(strategies: tuple[str, ...] | None = None) -> dict[str, list[
     return grids
 
 
-def _build_broad_candidates(families: tuple[str, ...] | None = None) -> list[_BroadCandidate]:
+def _build_broad_candidates(
+    families: tuple[str, ...] | None = None,
+    *,
+    regime_mode: str = "off",
+    intervals: tuple[str, ...] = ("1h", "4h"),
+) -> list[_BroadCandidate]:
     selected = _resolve_family_names(families)
+    resolved_regime_mode = _resolve_regime_mode(regime_mode)
     candidates: list[_BroadCandidate] = []
 
     if "ema_cross" in selected:
@@ -1053,7 +1208,22 @@ def _build_broad_candidates(families: tuple[str, ...] | None = None) -> list[_Br
                             )
                         )
 
-    return candidates
+    if resolved_regime_mode == "off":
+        return candidates
+
+    conditioned: list[_BroadCandidate] = []
+    for candidate in candidates:
+        regime_spec = _default_regime_spec(candidate.strategy_family, intervals[0] if intervals else "1h")
+        conditioned.append(
+            _BroadCandidate(
+                strategy_family=candidate.strategy_family,
+                strategy_name=candidate.strategy_name,
+                params=candidate.params,
+                regime_name=regime_spec.name,
+                regime_params=regime_spec.params,
+            )
+        )
+    return conditioned
 
 
 def _limit_broad_candidates(candidates: list[_BroadCandidate], max_combos: int | None) -> list[_BroadCandidate]:
@@ -1123,7 +1293,7 @@ def _build_strategy(strategy_name: str, params: dict[str, Any]) -> Strategy:
     raise ValueError(f"Unsupported strategy: {strategy_name}")
 
 
-def _build_broad_strategy(candidate: _BroadCandidate) -> Strategy:
+def _build_broad_base_strategy(candidate: _BroadCandidate) -> Strategy:
     params = candidate.params
     if candidate.strategy_name == "ema_cross":
         return EmaCrossTrendFilterStrategy(
@@ -1198,6 +1368,27 @@ def _build_broad_strategy(candidate: _BroadCandidate) -> Strategy:
     raise ValueError(f"Unsupported broad strategy: {candidate.strategy_name}")
 
 
+def _build_broad_strategy(*, candidate: _BroadCandidate, candles: pd.DataFrame, interval: str) -> tuple[Strategy, float]:
+    strategy = _build_broad_base_strategy(candidate)
+    allow_long_mask, allow_short_mask, coverage_ratio = _precompute_regime_masks(
+        candles=candles,
+        interval=interval,
+        strategy_family=candidate.strategy_family,
+        regime_name=candidate.regime_name,
+        regime_params=candidate.regime_params,
+    )
+    if candidate.regime_name == "off":
+        return strategy, coverage_ratio
+    return (
+        RegimeConditionedStrategy(
+            base_strategy=strategy,
+            allow_long_mask=allow_long_mask,
+            allow_short_mask=allow_short_mask,
+        ),
+        coverage_ratio,
+    )
+
+
 def _make_backtest_config(*, symbol: str, interval: str, config: StrategySearchConfig | BroadSweepConfig) -> BacktestConfig:
     return BacktestConfig(
         symbol=symbol,
@@ -1237,9 +1428,10 @@ def _run_broad_backtest(
     candidate: _BroadCandidate,
     config: BroadSweepConfig,
     engine: BacktestEngine,
-) -> BacktestResult:
-    strategy = _build_broad_strategy(candidate)
-    return engine.run(candles=candles, strategy=strategy, config=_make_backtest_config(symbol=symbol, interval=interval, config=config))
+) -> tuple[BacktestResult, float]:
+    strategy, coverage_ratio = _build_broad_strategy(candidate=candidate, candles=candles, interval=interval)
+    result = engine.run(candles=candles, strategy=strategy, config=_make_backtest_config(symbol=symbol, interval=interval, config=config))
+    return result, coverage_ratio
 
 
 def _window_rows(candles: pd.DataFrame, *, interval: str, train_days: int, test_days: int, step_days: int) -> list[_Window]:
@@ -1462,10 +1654,13 @@ def _evaluate_symbol_candidate(
     train_acc = _Accumulator(initial_equity=config.initial_equity, timeframe=interval)
     test_acc = _Accumulator(initial_equity=config.initial_equity, timeframe=interval)
     params_json = _json_dumps(candidate.params)
+    regime_params_json = _json_dumps(candidate.regime_params or {})
     window_rows: list[dict[str, Any]] = []
+    train_coverages: list[float] = []
+    test_coverages: list[float] = []
 
     for window in windows:
-        train_result = _run_broad_backtest(
+        train_result, train_coverage_ratio = _run_broad_backtest(
             candles=window.train_df,
             symbol=symbol,
             interval=interval,
@@ -1473,7 +1668,7 @@ def _evaluate_symbol_candidate(
             config=config,
             engine=engine,
         )
-        test_result = _run_broad_backtest(
+        test_result, test_coverage_ratio = _run_broad_backtest(
             candles=window.test_df,
             symbol=symbol,
             interval=interval,
@@ -1481,6 +1676,8 @@ def _evaluate_symbol_candidate(
             config=config,
             engine=engine,
         )
+        train_coverages.append(train_coverage_ratio)
+        test_coverages.append(test_coverage_ratio)
 
         train_window_acc = _Accumulator(initial_equity=config.initial_equity, timeframe=interval)
         train_window_acc.add(result=train_result, start_ts=window.train_start, end_ts=window.train_end)
@@ -1500,6 +1697,10 @@ def _evaluate_symbol_candidate(
                 "interval": interval,
                 "symbol": symbol,
                 "params_json": params_json,
+                "regime_name": candidate.regime_name,
+                "regime_params_json": regime_params_json,
+                "train_regime_coverage_ratio": train_coverage_ratio,
+                "test_regime_coverage_ratio": test_coverage_ratio,
                 "window_index": window.index,
                 "train_start": window.train_start.isoformat(),
                 "train_end": window.train_end.isoformat(),
@@ -1532,6 +1733,8 @@ def _evaluate_symbol_candidate(
             "interval": interval,
             "symbol": symbol,
             "params_json": params_json,
+            "regime_name": candidate.regime_name,
+            "regime_params_json": regime_params_json,
             "window_count": len(window_rows),
             "date_start": candles["timestamp"].min().isoformat() if not candles.empty else "",
             "date_end": candles["timestamp"].max().isoformat() if not candles.empty else "",
@@ -1555,6 +1758,8 @@ def _evaluate_symbol_candidate(
             "oos_positive": bool(test_summary["total_return"] > 0),
             "window_oos_positive_ratio": float(np.mean([value > 0 for value in window_returns])) if window_returns else 0.0,
             "window_oos_compound_return": _compound_total_return(window_returns),
+            "train_regime_coverage_ratio": float(np.mean(train_coverages)) if train_coverages else 0.0,
+            "regime_coverage_ratio": float(np.mean(test_coverages)) if test_coverages else 0.0,
         },
         window_rows,
     )
@@ -1620,8 +1825,8 @@ def _build_summary(by_symbol_df: pd.DataFrame, *, config: StrategySearchConfig) 
 
 
 def _major_alt_metrics(group: pd.DataFrame) -> tuple[float, float]:
-    major = group[group["symbol"].isin(["BTCUSDT", "ETHUSDT"])]
-    alt = group[~group["symbol"].isin(["BTCUSDT", "ETHUSDT"])]
+    major = group[group["symbol"].isin(["BTCUSDT", "ETHUSDT", "BNBUSDT"])]
+    alt = group[~group["symbol"].isin(["BTCUSDT", "ETHUSDT", "BNBUSDT"])]
     major_mean = float(major["oos_total_return"].mean()) if not major.empty else 0.0
     alt_mean = float(alt["oos_total_return"].mean()) if not alt.empty else 0.0
     return major_mean, alt_mean
@@ -1659,11 +1864,23 @@ def _rank_score(row: dict[str, Any], *, min_trade_count: int) -> float:
     )
 
 
+def _coverage_floor_from_regime_params_json(regime_params_json: str) -> float:
+    try:
+        params = json.loads(str(regime_params_json))
+    except json.JSONDecodeError:
+        return 0.0
+    value = params.get("min_coverage_ratio", 0.0)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _build_broad_summary(by_symbol_df: pd.DataFrame, *, config: BroadSweepConfig) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
-    group_cols = ["strategy_family", "strategy_name", "interval", "params_json"]
+    group_cols = ["strategy_family", "strategy_name", "interval", "params_json", "regime_name", "regime_params_json"]
     for keys, group in by_symbol_df.groupby(group_cols, sort=False):
-        strategy_family, strategy_name, interval, params_json = keys
+        strategy_family, strategy_name, interval, params_json, regime_name, regime_params_json = keys
         oos_returns = group["oos_total_return"].astype(float)
         oos_sharpes = group["oos_sharpe"].astype(float)
         oos_drawdowns = group["oos_max_drawdown"].astype(float)
@@ -1676,6 +1893,8 @@ def _build_broad_summary(by_symbol_df: pd.DataFrame, *, config: BroadSweepConfig
             "strategy_name": strategy_name,
             "interval": interval,
             "params_json": params_json,
+            "regime_name": regime_name,
+            "regime_params_json": regime_params_json,
             "symbol_count": int(len(group)),
             "window_count_total": int(group["window_count"].sum()),
             "train_total_return_mean": float(group["train_total_return"].mean()),
@@ -1699,6 +1918,8 @@ def _build_broad_summary(by_symbol_df: pd.DataFrame, *, config: BroadSweepConfig
             "major_oos_return_mean": major_mean,
             "alt_oos_return_mean": alt_mean,
             "fee_to_gross_ratio_mean": fee_ratio_mean,
+            "train_regime_coverage_ratio_mean": float(group["train_regime_coverage_ratio"].mean()),
+            "regime_coverage_ratio": float(group["regime_coverage_ratio"].mean()),
         }
         row["hard_gate_count"] = _hard_gate_count_for_summary(
             oos_return_mean=row["oos_total_return_mean"],
@@ -1707,11 +1928,17 @@ def _build_broad_summary(by_symbol_df: pd.DataFrame, *, config: BroadSweepConfig
             positive_symbols=positive_symbols,
             fee_ratio_mean=fee_ratio_mean,
         )
-        row["hard_gate_pass"] = bool(int(row["hard_gate_count"]) >= 4)
+        row["min_coverage_ratio"] = _coverage_floor_from_regime_params_json(regime_params_json)
+        row["coverage_floor_pass"] = bool(float(row["regime_coverage_ratio"]) >= float(row["min_coverage_ratio"]))
+        row["hard_gate_pass"] = bool(int(row["hard_gate_count"]) >= 4) and bool(row["coverage_floor_pass"])
         row["rank_score"] = _rank_score(row, min_trade_count=config.min_trade_count)
         rows.append(row)
 
     summary_df = pd.DataFrame(rows)
+    if summary_df.empty:
+        return summary_df
+    if "coverage_floor_pass" in summary_df.columns:
+        summary_df = summary_df[summary_df["coverage_floor_pass"]].reset_index(drop=True)
     if summary_df.empty:
         return summary_df
     summary_df = summary_df.sort_values(
@@ -1735,6 +1962,8 @@ def _build_family_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
                 "best_rank": int(best["rank"]),
                 "strategy_name": best["strategy_name"],
                 "params_json": best["params_json"],
+                "regime_name": best["regime_name"],
+                "regime_params_json": best["regime_params_json"],
                 "oos_total_return_mean": float(best["oos_total_return_mean"]),
                 "oos_sharpe_mean": float(best["oos_sharpe_mean"]),
                 "oos_max_drawdown_mean": float(best["oos_max_drawdown_mean"]),
@@ -1742,6 +1971,7 @@ def _build_family_summary(summary_df: pd.DataFrame) -> pd.DataFrame:
                 "fee_cost_total": float(best["fee_cost_total"]),
                 "positive_symbols": int(best["positive_symbols"]),
                 "symbol_return_std": float(best["symbol_return_std"]),
+                "regime_coverage_ratio": float(best["regime_coverage_ratio"]),
                 "hard_gate_pass": bool(best["hard_gate_pass"]),
                 "rank_score": float(best["rank_score"]),
             }
@@ -1757,7 +1987,10 @@ def _next_candidates(*, summary_df: pd.DataFrame) -> list[str]:
         return ["No candidates were produced."]
     suggestions: list[str] = []
     for _, row in summary_df.head(3).iterrows():
-        suggestions.append(f"`{row['strategy_family']}` @ `{row['interval']}` with params `{row['params_json']}`")
+        suggestions.append(
+            f"`{row['strategy_family']}` @ `{row['interval']}` regime `{row['regime_name']}` "
+            f"coverage `{float(row['regime_coverage_ratio']):.4f}` params `{row['params_json']}`"
+        )
     while len(suggestions) < 3:
         suggestions.append("Add a narrower family-specific follow-up around the current best candidate.")
     return suggestions[:3]
@@ -1784,6 +2017,7 @@ def _build_broad_markdown(
         f"- generated_at_utc: {pd.Timestamp.now(tz='UTC').isoformat()}",
         f"- intervals: `{intervals}`",
         f"- families: `{families}`",
+        f"- regime_mode: `{config.regime_mode}`",
         f"- raw_combo_count: `{raw_combo_count}`",
         f"- selected_combo_count: `{selected_combo_count}`",
         f"- symbols: `{len(by_symbol_df['symbol'].unique()) if not by_symbol_df.empty else 0}`",
@@ -1806,24 +2040,26 @@ def _build_broad_markdown(
         path.write_text("\n".join(lines), encoding="utf-8")
         return
 
-    lines.append("| rank | family | strategy | interval | oos_return | oos_sharpe | oos_mdd | positive_symbols | fee_cost_total | rank_score |")
-    lines.append("|---:|---|---|---|---:|---:|---:|---:|---:|---:|")
+    lines.append("| rank | family | strategy | interval | regime | coverage | oos_return | oos_sharpe | oos_mdd | positive_symbols | fee_cost_total | rank_score |")
+    lines.append("|---:|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|")
     for _, row in summary_df.head(10).iterrows():
         lines.append(
             f"| {int(row['rank'])} | {row['strategy_family']} | {row['strategy_name']} | {row['interval']} | "
-            f"{float(row['oos_total_return_mean']):.4f} | {float(row['oos_sharpe_mean']):.4f} | "
-            f"{float(row['oos_max_drawdown_mean']):.4f} | {int(row['positive_symbols'])}/{int(row['symbol_count'])} | "
-            f"{float(row['fee_cost_total']):.4f} | {float(row['rank_score']):.4f} |"
+            f"{row['regime_name']} | {float(row['regime_coverage_ratio']):.4f} | {float(row['oos_total_return_mean']):.4f} | "
+            f"{float(row['oos_sharpe_mean']):.4f} | {float(row['oos_max_drawdown_mean']):.4f} | "
+            f"{int(row['positive_symbols'])}/{int(row['symbol_count'])} | {float(row['fee_cost_total']):.4f} | "
+            f"{float(row['rank_score']):.4f} |"
         )
 
     lines.extend(["", "## Best Per Family", ""])
-    lines.append("| family | interval | strategy | oos_return | oos_sharpe | oos_mdd | positive_symbols | hard_gate |")
-    lines.append("|---|---|---|---:|---:|---:|---:|---|")
+    lines.append("| family | interval | strategy | regime | coverage | oos_return | oos_sharpe | oos_mdd | positive_symbols | hard_gate |")
+    lines.append("|---|---|---|---|---:|---:|---:|---:|---:|---|")
     for _, row in family_summary_df.iterrows():
         lines.append(
-            f"| {row['strategy_family']} | {row['interval']} | {row['strategy_name']} | "
-            f"{float(row['oos_total_return_mean']):.4f} | {float(row['oos_sharpe_mean']):.4f} | "
-            f"{float(row['oos_max_drawdown_mean']):.4f} | {int(row['positive_symbols'])} | {bool(row['hard_gate_pass'])} |"
+            f"| {row['strategy_family']} | {row['interval']} | {row['strategy_name']} | {row['regime_name']} | "
+            f"{float(row['regime_coverage_ratio']):.4f} | {float(row['oos_total_return_mean']):.4f} | "
+            f"{float(row['oos_sharpe_mean']):.4f} | {float(row['oos_max_drawdown_mean']):.4f} | "
+            f"{int(row['positive_symbols'])} | {bool(row['hard_gate_pass'])} |"
         )
 
     lines.extend(["", "## 1h vs 4h", ""])
@@ -2025,7 +2261,11 @@ def run_strategy_search(*, symbols: list[str], config: StrategySearchConfig) -> 
 
 def run_broad_sweep(*, symbols: list[str], config: BroadSweepConfig) -> BroadSweepResult:
     normalized_symbols = [str(symbol).upper() for symbol in symbols]
-    raw_candidates = _build_broad_candidates(config.families)
+    raw_candidates = _build_broad_candidates(
+        config.families,
+        regime_mode=config.regime_mode,
+        intervals=config.intervals,
+    )
     windows_per_interval: dict[str, int] = {}
     for interval in config.intervals:
         sample_candles = _load_candles_for_interval(symbol=normalized_symbols[0], interval=interval, data_root=config.data_root)
@@ -2055,6 +2295,35 @@ def run_broad_sweep(*, symbols: list[str], config: BroadSweepConfig) -> BroadSwe
         effective_max = affordable_max if effective_max is None else min(effective_max, affordable_max)
 
     candidates = _limit_broad_candidates(raw_candidates, effective_max)
+    return run_broad_sweep_candidates(
+        symbols=normalized_symbols,
+        config=config,
+        candidates=candidates,
+        raw_combo_count=len(raw_candidates),
+    )
+
+
+def run_broad_sweep_candidates(
+    *,
+    symbols: list[str],
+    config: BroadSweepConfig,
+    candidates: list[_BroadCandidate],
+    raw_combo_count: int | None = None,
+) -> BroadSweepResult:
+    normalized_symbols = [str(symbol).upper() for symbol in symbols]
+    windows_per_interval: dict[str, int] = {}
+    for interval in config.intervals:
+        sample_candles = _load_candles_for_interval(symbol=normalized_symbols[0], interval=interval, data_root=config.data_root)
+        windows_per_interval[interval] = len(
+            _window_rows(
+                sample_candles,
+                interval=interval,
+                train_days=config.train_days,
+                test_days=config.test_days,
+                step_days=config.step_days,
+            )
+        )
+
     estimated_backtests, estimated_hours = _estimate_broad_runtime(
         candidate_count=len(candidates),
         symbol_count=len(normalized_symbols),
@@ -2100,7 +2369,7 @@ def run_broad_sweep(*, symbols: list[str], config: BroadSweepConfig) -> BroadSwe
         family_summary_df=family_summary_df,
         by_symbol_df=by_symbol_df,
         config=config,
-        raw_combo_count=len(raw_candidates),
+        raw_combo_count=int(raw_combo_count if raw_combo_count is not None else len(candidates)),
         selected_combo_count=len(candidates),
         estimated_backtests=estimated_backtests,
         estimated_hours=estimated_hours,
@@ -2124,6 +2393,7 @@ __all__ = [
     "SUPPORTED_FAMILIES",
     "SUPPORTED_STRATEGIES",
     "StrategySearchConfig",
+    "run_broad_sweep_candidates",
     "StrategySearchResult",
     "calculate_adx",
     "run_broad_sweep",

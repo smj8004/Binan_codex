@@ -199,6 +199,10 @@ class AppConfig(BaseModel):
     capital_limit_usdt: float | None = Field(default=None, gt=0.0)
     budget_usdt_mode: Literal["risk", "auto", "fixed"] = "risk"
     budget_usdt_value: float | None = Field(default=None, gt=0.0)
+    validation_probe_enabled: bool = False
+    validation_probe_entry_after_bars: int = Field(default=0, ge=0)
+    validation_probe_exit_after_bars: int = Field(default=0, ge=0)
+    validation_allow_live_backfill_execution: bool = False
 
     @model_validator(mode="after")
     def _validate_windows(self) -> "AppConfig":
@@ -331,6 +335,10 @@ class AppConfig(BaseModel):
             "HEARTBEAT_ENABLED": False,
             "HEARTBEAT_INTERVAL_MINUTES": 30,
             "CAPITAL_LIMIT_USDT": "",
+            "VALIDATION_PROBE_ENABLED": False,
+            "VALIDATION_PROBE_ENTRY_AFTER_BARS": 0,
+            "VALIDATION_PROBE_EXIT_AFTER_BARS": 0,
+            "VALIDATION_ALLOW_LIVE_BACKFILL_EXECUTION": False,
         }
 
         requested_preset = preset or os.getenv("PRESET")
@@ -510,4 +518,11 @@ class AppConfig(BaseModel):
             capital_limit_usdt=capital_limit_usdt,
             budget_usdt_mode=budget_usdt_mode,
             budget_usdt_value=budget_usdt_value,
+            validation_probe_enabled=_as_bool(str(v("VALIDATION_PROBE_ENABLED")), default=False),
+            validation_probe_entry_after_bars=int(v("VALIDATION_PROBE_ENTRY_AFTER_BARS") or 0),
+            validation_probe_exit_after_bars=int(v("VALIDATION_PROBE_EXIT_AFTER_BARS") or 0),
+            validation_allow_live_backfill_execution=_as_bool(
+                str(v("VALIDATION_ALLOW_LIVE_BACKFILL_EXECUTION")),
+                default=False,
+            ),
         )

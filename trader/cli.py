@@ -47,9 +47,16 @@ from trader.strategy.base import Bar, Strategy
 from trader.strategy.bollinger import BollingerBandStrategy
 from trader.strategy.ema_cross import EMACrossStrategy
 from trader.strategy.macd import MACDStrategy
+from trader.strategy.macd_final_candidate import (
+    FINAL_CANDIDATE_MACD_PARAMS,
+    FINAL_CANDIDATE_PROFILE,
+    FINAL_CANDIDATE_REGIME_NAME,
+    FinalCandidateRegime,
+    MACDFinalCandidateStrategy,
+)
 from trader.strategy.rsi import RSIStrategy
 
-AVAILABLE_STRATEGIES = ["ema_cross", "rsi", "macd", "bollinger"]
+AVAILABLE_STRATEGIES = ["ema_cross", "rsi", "macd", "macd_final_candidate", "bollinger"]
 
 app = typer.Typer(help="Binance trader CLI (backtest / optimize / replay / run / paper / live)")
 console = Console()
@@ -329,6 +336,9 @@ def _build_strategy(
             take_profit_pct=take_profit_pct,
         )
 
+    if strategy_name == "macd_final_candidate":
+        return MACDFinalCandidateStrategy()
+
     if strategy_name == "bollinger":
         period = int(params.get("period", 20))
         std_dev = float(params.get("std_dev", 2.0))
@@ -372,6 +382,27 @@ def _get_strategy_params(strategy_name: str, cfg: AppConfig) -> dict[str, Any]:
             "use_histogram": False,
             "stop_loss_pct": cfg.ema_stop_loss_pct,
             "take_profit_pct": cfg.ema_take_profit_pct,
+        }
+    if strategy_name == "macd_final_candidate":
+        regime = FinalCandidateRegime()
+        return {
+            **dict(FINAL_CANDIDATE_MACD_PARAMS),
+            "profile_name": FINAL_CANDIDATE_PROFILE,
+            "regime_name": FINAL_CANDIDATE_REGIME_NAME,
+            "regime_params": {
+                "adx_window": regime.adx_window,
+                "low_adx_threshold": regime.low_adx_threshold,
+                "high_adx_threshold": regime.high_adx_threshold,
+                "vol_window": regime.vol_window,
+                "vol_percentile_window": regime.vol_percentile_window,
+                "low_vol_quantile": regime.low_vol_quantile,
+                "high_vol_quantile": regime.high_vol_quantile,
+                "trend_ema_span": regime.trend_ema_span,
+                "trend_slope_lookback": regime.trend_slope_lookback,
+                "trend_slope_threshold": regime.trend_slope_threshold,
+                "trend_distance_threshold": regime.trend_distance_threshold,
+                "min_coverage_ratio": regime.min_coverage_ratio,
+            },
         }
     if strategy_name == "bollinger":
         return {
@@ -1025,7 +1056,8 @@ def run(
         storage=storage,
     )
     strategy_name = loaded_strategy or strategy
-    strategy_obj = _build_strategy(strategy_name=strategy_name, params=loaded_params, cfg=cfg)
+    strategy_params = loaded_params if loaded_params else _get_strategy_params(strategy_name, cfg)
+    strategy_obj = _build_strategy(strategy_name=strategy_name, params=strategy_params, cfg=cfg)
 
     effective_sl_pct = float(
         run_stop_loss_pct
@@ -1131,6 +1163,13 @@ def run(
         quiet_hours=(cfg.quiet_hours if sleep_mode else None),
         heartbeat_enabled=cfg.heartbeat_enabled,
         heartbeat_interval_minutes=cfg.heartbeat_interval_minutes,
+        strategy_name=strategy_name,
+        strategy_params=dict(strategy_params),
+        candidate_profile=(FINAL_CANDIDATE_PROFILE if strategy_name == FINAL_CANDIDATE_PROFILE else None),
+        validation_probe_enabled=cfg.validation_probe_enabled,
+        validation_probe_entry_after_bars=cfg.validation_probe_entry_after_bars,
+        validation_probe_exit_after_bars=cfg.validation_probe_exit_after_bars,
+        validation_allow_live_backfill_execution=cfg.validation_allow_live_backfill_execution,
     )
     _validate_live_entry_sizing(runtime_cfg)
     risk_guard = RiskGuard(
@@ -1680,6 +1719,8 @@ def status(
         overview.add_row("updated_at", str(summary.get("updated_at", "-")))
         overview.add_row("last_bar_ts", str(summary.get("last_bar_ts", "-")))
         overview.add_row("symbols", ",".join(sorted(pos_map.keys())))
+        overview.add_row("strategy", str(risk_state.get("strategy", "-")))
+        overview.add_row("candidate_profile", str(risk_state.get("candidate_profile", "-")))
         overview.add_row("halted", str(risk_state.get("halted", False)))
         overview.add_row("halt_reason", str(risk_state.get("halt_reason", "")))
         overview.add_row("preset", str(risk_state.get("preset", "-")))
@@ -1714,6 +1755,46 @@ def status(
         overview.add_row("protective_fail_count", str(risk_state.get("protective_fail_count", 0)))
         overview.add_row("net_pnl", f"{float(summary.get('trades_net_pnl', 0.0)):.4f}")
         console.print(overview)
+
+        if int(summary.get("fills_count", 0) or 0) > 0:
+            provenance_table = Table(title="Fill Provenance")
+            provenance_table.add_column("key")
+            provenance_table.add_column("value")
+            provenance_table.add_row("user_stream", str(summary.get("fills_from_user_stream_count", 0)))
+            provenance_table.add_row("rest_trade_reconcile", str(summary.get("fills_from_rest_reconcile_count", 0)))
+            provenance_table.add_row("aggregated_fallback", str(summary.get("fills_from_aggregated_fallback_count", 0)))
+            provenance_table.add_row("reconciled_missing_ws", str(summary.get("reconciled_missing_ws_fill_count", 0)))
+            provenance_table.add_row("partial_fills", str(summary.get("partial_fills_count", 0)))
+            provenance_table.add_row("trade_query_unavailable", str(summary.get("trade_query_unavailable_count", 0)))
+            provenance_table.add_row(
+                "provenance_consistency",
+                str(summary.get("fill_provenance_consistency_pass", False)),
+            )
+            provenance_table.add_row(
+                "breakdown",
+                json.dumps(summary.get("fill_provenance_breakdown", {}), ensure_ascii=True, sort_keys=True),
+            )
+            provenance_table.add_row(
+                "partial_fill_audit",
+                json.dumps(summary.get("partial_fill_audit_summary", {}), ensure_ascii=True, sort_keys=True),
+            )
+            console.print(provenance_table)
+
+        strategy_state_map = _as_symbol_map(summary.get("strategy_state") or {}, default_symbol=cfg.symbol)
+        strategy_state = strategy_state_map.get(default_symbol, {})
+        if strategy_state:
+            strategy_table = Table(title="Strategy State")
+            strategy_table.add_column("key")
+            strategy_table.add_column("value")
+            strategy_table.add_row("profile_name", str(strategy_state.get("profile_name", "-")))
+            strategy_table.add_row("regime_name", str(strategy_state.get("regime_name", "-")))
+            strategy_table.add_row("base_signal", str(strategy_state.get("base_signal", "-")))
+            strategy_table.add_row("gated_signal", str(strategy_state.get("gated_signal", "-")))
+            strategy_table.add_row("allow_long", str(strategy_state.get("allow_long", "-")))
+            strategy_table.add_row("allow_short", str(strategy_state.get("allow_short", "-")))
+            strategy_table.add_row("coverage_ratio", str(strategy_state.get("coverage_ratio", "-")))
+            strategy_table.add_row("fixed_params", json.dumps(strategy_state.get("fixed_params", {}), ensure_ascii=True, sort_keys=True))
+            console.print(strategy_table)
 
         if risk_map:
             total_exposure = 0.0

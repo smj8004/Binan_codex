@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -76,7 +77,16 @@ class SQLiteStorage:
                 qty REAL NOT NULL,
                 price REAL NOT NULL,
                 fee REAL NOT NULL,
-                liquidity TEXT NOT NULL
+                liquidity TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'unknown',
+                provenance_detail TEXT,
+                source_history TEXT NOT NULL DEFAULT '[]',
+                is_partial_fill INTEGER NOT NULL DEFAULT 0,
+                partial_fill_group_key TEXT,
+                is_reconciled INTEGER NOT NULL DEFAULT 0,
+                reconciled_from_missing_ws INTEGER NOT NULL DEFAULT 0,
+                trade_query_available INTEGER,
+                trade_query_attempted INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -185,6 +195,15 @@ class SQLiteStorage:
         self._ensure_column("orders", "stop_price", "REAL")
         self._ensure_column("orders", "time_in_force", "TEXT")
         self._ensure_column("fills", "symbol", "TEXT")
+        self._ensure_column("fills", "source", "TEXT NOT NULL DEFAULT 'unknown'")
+        self._ensure_column("fills", "provenance_detail", "TEXT")
+        self._ensure_column("fills", "source_history", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("fills", "is_partial_fill", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("fills", "partial_fill_group_key", "TEXT")
+        self._ensure_column("fills", "is_reconciled", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("fills", "reconciled_from_missing_ws", "INTEGER NOT NULL DEFAULT 0")
+        self._ensure_column("fills", "trade_query_available", "INTEGER")
+        self._ensure_column("fills", "trade_query_attempted", "INTEGER NOT NULL DEFAULT 0")
         self._ensure_column("trades", "reason", "TEXT")
         self._conn.commit()
 
@@ -265,12 +284,28 @@ class SQLiteStorage:
         self._conn.commit()
 
     def save_fill(self, fill: Any) -> None:
-        row = self._obj_to_dict(fill)
+        row = self._normalize_fill_row(self._obj_to_dict(fill))
+        existing = self._conn.execute(
+            """
+            SELECT id
+            FROM fills
+            WHERE run_id = ? AND fill_id = ?
+            LIMIT 1
+            """,
+            (row["run_id"], row["fill_id"]),
+        ).fetchone()
+        if existing is not None:
+            self._update_fill_metadata(row["run_id"], row["fill_id"], row)
+            return
         self._conn.execute(
             """
             INSERT INTO fills
-            (run_id, symbol, fill_id, order_id, ts, side, qty, price, fee, liquidity)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (
+                run_id, symbol, fill_id, order_id, ts, side, qty, price, fee, liquidity,
+                source, provenance_detail, source_history, is_partial_fill, partial_fill_group_key,
+                is_reconciled, reconciled_from_missing_ws, trade_query_available, trade_query_attempted
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 row["run_id"],
@@ -283,9 +318,60 @@ class SQLiteStorage:
                 row["price"],
                 row["fee"],
                 row["liquidity"],
+                row["source"],
+                row.get("provenance_detail"),
+                json.dumps(row["source_history"], ensure_ascii=True),
+                1 if bool(row.get("is_partial_fill", False)) else 0,
+                row.get("partial_fill_group_key"),
+                1 if bool(row.get("is_reconciled", False)) else 0,
+                1 if bool(row.get("reconciled_from_missing_ws", False)) else 0,
+                (
+                    None
+                    if row.get("trade_query_available") is None
+                    else 1 if bool(row.get("trade_query_available")) else 0
+                ),
+                1 if bool(row.get("trade_query_attempted", False)) else 0,
             ),
         )
+        self._refresh_partial_fill_group(
+            run_id=row["run_id"],
+            order_id=row["order_id"],
+            partial_fill_group_key=row.get("partial_fill_group_key"),
+        )
         self._conn.commit()
+
+    def merge_fill_provenance(self, *, run_id: str, fill_id: str, update: dict[str, Any]) -> None:
+        row = self._normalize_fill_row({"run_id": run_id, "fill_id": fill_id, **update}, allow_missing_required=True)
+        self._update_fill_metadata(run_id, fill_id, row)
+        if row.get("order_id"):
+            self._refresh_partial_fill_group(
+                run_id=run_id,
+                order_id=str(row["order_id"]),
+                partial_fill_group_key=row.get("partial_fill_group_key"),
+            )
+        self._conn.commit()
+
+    def find_fill_id_by_order_source(self, *, run_id: str, order_id: str, source: str) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT fill_id
+            FROM fills
+            WHERE run_id = ? AND order_id = ? AND source = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (run_id, order_id, source),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["fill_id"])
+
+    def count_fills_for_order(self, *, run_id: str, order_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(DISTINCT fill_id) AS c FROM fills WHERE run_id = ? AND order_id = ?",
+            (run_id, order_id),
+        ).fetchone()
+        return int(row["c"]) if row is not None else 0
 
     def save_trade(self, trade: Any) -> None:
         row = self._obj_to_dict(trade)
@@ -630,14 +716,34 @@ class SQLiteStorage:
         counts = self._conn.execute(
             """
             SELECT
-              (SELECT COUNT(*) FROM orders WHERE run_id = ?) AS orders_count,
-              (SELECT COUNT(*) FROM fills WHERE run_id = ?) AS fills_count,
+              (SELECT COUNT(DISTINCT order_id) FROM orders WHERE run_id = ?) AS orders_count,
+              (SELECT COUNT(DISTINCT fill_id) FROM fills WHERE run_id = ?) AS fills_count,
               (SELECT COUNT(*) FROM trades WHERE run_id = ?) AS trades_count,
               (SELECT COALESCE(SUM(net_pnl), 0.0) FROM trades WHERE run_id = ?) AS trades_net_pnl,
               (SELECT COALESCE(SUM(fee_paid), 0.0) FROM trades WHERE run_id = ?) AS trades_fee
             """,
             (run_id, run_id, run_id, run_id, run_id),
         ).fetchone()
+        fill_rows = self._conn.execute(
+            """
+            SELECT
+              fill_id,
+              order_id,
+              source,
+              source_history,
+              is_partial_fill,
+              partial_fill_group_key,
+              is_reconciled,
+              reconciled_from_missing_ws,
+              trade_query_available,
+              trade_query_attempted
+            FROM fills
+            WHERE run_id = ?
+            ORDER BY id ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        provenance = self._build_fill_observability(fill_rows)
         return {
             **state,
             "orders_count": int(counts["orders_count"]) if counts is not None else 0,
@@ -645,6 +751,7 @@ class SQLiteStorage:
             "trades_count": int(counts["trades_count"]) if counts is not None else 0,
             "trades_net_pnl": float(counts["trades_net_pnl"]) if counts is not None else 0.0,
             "trades_fee": float(counts["trades_fee"]) if counts is not None else 0.0,
+            **provenance,
         }
 
     def _parse_json_obj(self, raw: Any) -> dict[str, Any]:
@@ -693,3 +800,201 @@ class SQLiteStorage:
             return right if str(right) > str(left) else left
         except Exception:
             return right or left
+
+    def _normalize_fill_row(self, row: dict[str, Any], *, allow_missing_required: bool = False) -> dict[str, Any]:
+        source = str(row.get("source", row.get("provenance_source", "unknown")) or "unknown")
+        history = self._normalize_source_history(row.get("source_history"), source=source)
+        partial_fill_group_key = row.get("partial_fill_group_key")
+        if not partial_fill_group_key and row.get("run_id") and row.get("order_id"):
+            partial_fill_group_key = f"{row['run_id']}:{row['order_id']}"
+        trade_query_available = row.get("trade_query_available")
+        if trade_query_available is not None:
+            trade_query_available = bool(trade_query_available)
+        trade_query_attempted = bool(row.get("trade_query_attempted", trade_query_available is not None))
+        normalized = {
+            **row,
+            "source": source,
+            "provenance_detail": row.get("provenance_detail", row.get("source_detail")),
+            "source_history": history,
+            "is_partial_fill": bool(row.get("is_partial_fill", False)),
+            "partial_fill_group_key": partial_fill_group_key,
+            "is_reconciled": bool(row.get("is_reconciled", source in {"rest_trade_reconcile", "aggregated_fallback"})),
+            "reconciled_from_missing_ws": bool(
+                row.get("reconciled_from_missing_ws", source in {"rest_trade_reconcile", "aggregated_fallback"})
+            ),
+            "trade_query_available": trade_query_available,
+            "trade_query_attempted": trade_query_attempted,
+        }
+        if allow_missing_required:
+            return normalized
+        required = ("run_id", "fill_id", "order_id", "ts", "side", "qty", "price", "fee", "liquidity")
+        missing = [key for key in required if key not in normalized]
+        if missing:
+            raise KeyError(f"Missing fill fields: {', '.join(missing)}")
+        return normalized
+
+    def _normalize_source_history(self, raw: Any, *, source: str) -> list[str]:
+        values: list[str] = []
+        if isinstance(raw, str):
+            text = raw.strip()
+            if text:
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    parsed = [part.strip() for part in text.split(",") if part.strip()]
+                raw = parsed
+        if isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                text = str(item).strip()
+                if text and text not in values:
+                    values.append(text)
+        if source and source not in values:
+            values.append(source)
+        return values
+
+    def _update_fill_metadata(self, run_id: str, fill_id: str, row: dict[str, Any]) -> None:
+        existing = self._conn.execute(
+            """
+            SELECT
+              source,
+              provenance_detail,
+              source_history,
+              is_partial_fill,
+              partial_fill_group_key,
+              is_reconciled,
+              reconciled_from_missing_ws,
+              trade_query_available,
+              trade_query_attempted
+            FROM fills
+            WHERE run_id = ? AND fill_id = ?
+            LIMIT 1
+            """,
+            (run_id, fill_id),
+        ).fetchone()
+        if existing is None:
+            return
+        current_source = str(existing["source"] or "unknown")
+        merged_history = self._normalize_source_history(existing["source_history"], source=current_source)
+        for item in row.get("source_history", []):
+            text = str(item).strip()
+            if text and text not in merged_history:
+                merged_history.append(text)
+        detail = str(existing["provenance_detail"] or "").strip() or row.get("provenance_detail")
+        partial_fill_group_key = existing["partial_fill_group_key"] or row.get("partial_fill_group_key")
+        if row.get("order_id") and not partial_fill_group_key:
+            partial_fill_group_key = f"{run_id}:{row['order_id']}"
+        trade_query_available = existing["trade_query_available"]
+        if trade_query_available is None and row.get("trade_query_available") is not None:
+            trade_query_available = 1 if bool(row.get("trade_query_available")) else 0
+        self._conn.execute(
+            """
+            UPDATE fills
+            SET
+              provenance_detail = ?,
+              source_history = ?,
+              is_partial_fill = ?,
+              partial_fill_group_key = ?,
+              is_reconciled = ?,
+              reconciled_from_missing_ws = ?,
+              trade_query_available = ?,
+              trade_query_attempted = ?
+            WHERE run_id = ? AND fill_id = ?
+            """,
+            (
+                detail,
+                json.dumps(merged_history, ensure_ascii=True),
+                1 if (bool(existing["is_partial_fill"]) or bool(row.get("is_partial_fill", False))) else 0,
+                partial_fill_group_key,
+                1 if (bool(existing["is_reconciled"]) or bool(row.get("is_reconciled", False))) else 0,
+                1
+                if (
+                    bool(existing["reconciled_from_missing_ws"]) or bool(row.get("reconciled_from_missing_ws", False))
+                )
+                else 0,
+                trade_query_available,
+                1 if (bool(existing["trade_query_attempted"]) or bool(row.get("trade_query_attempted", False))) else 0,
+                run_id,
+                fill_id,
+            ),
+        )
+
+    def _refresh_partial_fill_group(self, *, run_id: str, order_id: str, partial_fill_group_key: str | None) -> None:
+        rows = self._conn.execute(
+            """
+            SELECT fill_id
+            FROM fills
+            WHERE run_id = ? AND order_id = ?
+            ORDER BY id ASC
+            """,
+            (run_id, order_id),
+        ).fetchall()
+        if len(rows) <= 1:
+            return
+        group_key = partial_fill_group_key or f"{run_id}:{order_id}"
+        self._conn.execute(
+            """
+            UPDATE fills
+            SET is_partial_fill = 1,
+                partial_fill_group_key = COALESCE(partial_fill_group_key, ?)
+            WHERE run_id = ? AND order_id = ?
+            """,
+            (group_key, run_id, order_id),
+        )
+
+    def _build_fill_observability(self, fill_rows: list[sqlite3.Row]) -> dict[str, Any]:
+        by_source: Counter[str] = Counter()
+        partial_fill_groups: set[str] = set()
+        fills_with_source_history_count = 0
+        partial_fills_count = 0
+        fills_reconciled_count = 0
+        reconciled_missing_ws_fill_count = 0
+        trade_query_unavailable_count = 0
+        for row in fill_rows:
+            source = str(row["source"] or "unknown")
+            by_source[source] += 1
+            history = self._normalize_source_history(row["source_history"], source=source)
+            if len(history) > 1:
+                fills_with_source_history_count += 1
+            if bool(row["is_partial_fill"]):
+                partial_fills_count += 1
+                group_key = str(row["partial_fill_group_key"] or "").strip()
+                if group_key:
+                    partial_fill_groups.add(group_key)
+            if bool(row["is_reconciled"]):
+                fills_reconciled_count += 1
+            if bool(row["reconciled_from_missing_ws"]):
+                reconciled_missing_ws_fill_count += 1
+            if row["trade_query_available"] == 0:
+                trade_query_unavailable_count += 1
+        fills_count = len(fill_rows)
+        by_source_dict = dict(sorted(by_source.items()))
+        fills_from_user_stream_count = int(by_source.get("user_stream", 0))
+        fills_from_rest_reconcile_count = int(by_source.get("rest_trade_reconcile", 0))
+        fills_from_aggregated_fallback_count = int(by_source.get("aggregated_fallback", 0))
+        fill_provenance_consistency_pass = fills_count == sum(by_source.values()) and all(
+            str(source).strip() and str(source).strip().lower() != "unknown" for source in by_source
+        )
+        return {
+            "fills_reconciled_count": fills_reconciled_count,
+            "fills_from_user_stream_count": fills_from_user_stream_count,
+            "fills_from_rest_reconcile_count": fills_from_rest_reconcile_count,
+            "fills_from_aggregated_fallback_count": fills_from_aggregated_fallback_count,
+            "aggregated_fallback_fill_count": fills_from_aggregated_fallback_count,
+            "partial_fills_count": partial_fills_count,
+            "reconciled_missing_ws_fill_count": reconciled_missing_ws_fill_count,
+            "trade_query_unavailable_count": trade_query_unavailable_count,
+            "fill_provenance_consistency_pass": fill_provenance_consistency_pass,
+            "fill_provenance_breakdown": {
+                "by_source": by_source_dict,
+                "fills_with_source_history_count": fills_with_source_history_count,
+                "fills_reconciled_count": fills_reconciled_count,
+            },
+            "partial_fill_audit_summary": {
+                "partial_fill_groups_count": len(partial_fill_groups),
+                "partial_fill_rows_count": partial_fills_count,
+                "aggregated_fallback_fill_count": fills_from_aggregated_fallback_count,
+                "reconciled_missing_ws_fill_count": reconciled_missing_ws_fill_count,
+                "trade_query_unavailable_count": trade_query_unavailable_count,
+                "fills_with_multiple_source_history_count": fills_with_source_history_count,
+            },
+        }

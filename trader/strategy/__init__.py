@@ -4,6 +4,7 @@ from .base import Bar, Signal, Strategy, StrategyPosition
 from .bollinger import BollingerBandStrategy
 from .ema_cross import EMACrossStrategy
 from .macd import MACDStrategy
+from .macd_final_candidate import MACDFinalCandidateStrategy
 from .rsi import RSIStrategy
 
 # Strategy families
@@ -67,6 +68,7 @@ __all__ = [
     "EMACrossStrategy",
     "RSIStrategy",
     "MACDStrategy",
+    "MACDFinalCandidateStrategy",
     "BollingerBandStrategy",
     # Trend family
     "TrendEMACrossStrategy",
