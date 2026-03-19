@@ -1,0 +1,158 @@
+﻿{
+    "verdict":  "PASS",
+    "mode":  "live",
+    "out_dir":  "out/operational_validation/macd_final_candidate_testnet",
+    "run_id":  "392e3990ee3547ee8c30a98f7f0356b8",
+    "start_utc":  "2026-03-19T14:31:54.3878767Z",
+    "end_utc":  "2026-03-19T14:37:04.5409655Z",
+    "duration_minutes":  5.17,
+    "command":  "uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT,ETH/USDT,BNB/USDT --timeframe 4h --strategy macd_final_candidate --preset macd_final_candidate_ops --max-bars 60 --halt-on-error --yes-i-understand-live-risk",
+    "candidate":  {
+                      "strategy":  "macd_final_candidate",
+                      "timeframe":  "4h",
+                      "symbols":  "BTC/USDT,ETH/USDT,BNB/USDT",
+                      "preset":  "macd_final_candidate_ops",
+                      "fixed_params_ok":  true
+                  },
+    "whether_fixed_params_loaded":  true,
+    "volatility_breaker_trigger_count":  0,
+    "user_stream_no_running_event_loop_count":  0,
+    "user_stream_disconnect_count":  14,
+    "user_stream_dns_reconnect_count":  14,
+    "protective_orders_created_count":  3,
+    "symbols_halted":  0,
+    "halt_reason_summary":  "",
+    "fills_accounted_count":  8,
+    "fills_reconciled_count":  8,
+    "fills_from_user_stream_count":  0,
+    "fills_from_rest_reconcile_count":  8,
+    "fills_from_aggregated_fallback_count":  0,
+    "aggregated_fallback_fill_count":  0,
+    "partial_fills_count":  4,
+    "reconciled_missing_ws_fill_count":  8,
+    "trade_query_unavailable_count":  0,
+    "accounting_consistency_pass":  true,
+    "fill_provenance_consistency_pass":  true,
+    "fill_provenance_breakdown":  {
+                                      "by_source":  {
+                                                        "rest_trade_reconcile":  8
+                                                    },
+                                      "fills_with_source_history_count":  0,
+                                      "fills_reconciled_count":  8
+                                  },
+    "partial_fill_audit_summary":  {
+                                       "partial_fill_groups_count":  2,
+                                       "partial_fill_rows_count":  4,
+                                       "aggregated_fallback_fill_count":  0,
+                                       "reconciled_missing_ws_fill_count":  8,
+                                       "trade_query_unavailable_count":  0,
+                                       "fills_with_multiple_source_history_count":  0
+                                   },
+    "accounting_degraded_mode_used":  true,
+    "metrics":  {
+                    "orders":  12,
+                    "fills":  8,
+                    "trades":  3,
+                    "net_pnl":  -0.32971999999999047,
+                    "last_bar_ts":  "2026-03-19 08:00:00+00:00",
+                    "updated_at":  "2026-03-19T14:36:52.427587+00:00",
+                    "orders_row_count":  18,
+                    "fills_row_count":  8
+                },
+    "runtime":  {
+                    "halted":  false,
+                    "halt_reason":  "",
+                    "strategy":  "macd_final_candidate",
+                    "candidate_profile":  "macd_final_candidate",
+                    "broker":  "live_binance",
+                    "env":  "testnet",
+                    "live_trading":  true,
+                    "account_total_usdt":  4947.79587233,
+                    "account_available_usdt":  4947.79587233
+                },
+    "strategy_state":  {
+                           "profile_name":  "macd_final_candidate",
+                           "regime_name":  "trend_tight_high_adx_extreme_vol_strict_trend",
+                           "regime_params":  {
+                                                 "adx_window":  14,
+                                                 "low_adx_threshold":  18.0,
+                                                 "high_adx_threshold":  30.0,
+                                                 "vol_window":  20,
+                                                 "vol_percentile_window":  160,
+                                                 "low_vol_quantile":  0.2,
+                                                 "high_vol_quantile":  0.8,
+                                                 "trend_ema_span":  100,
+                                                 "trend_slope_lookback":  16,
+                                                 "trend_slope_threshold":  0.003,
+                                                 "trend_distance_threshold":  0.005,
+                                                 "min_coverage_ratio":  0.2
+                                             },
+                           "fixed_params":  {
+                                                "fast_period":  12,
+                                                "slow_period":  26,
+                                                "signal_period":  9,
+                                                "allow_short":  true,
+                                                "use_histogram":  false,
+                                                "histogram_threshold":  0.0,
+                                                "adx_filter":  false
+                                            },
+                           "base_signal":  "hold",
+                           "gated_signal":  "hold",
+                           "allow_long":  false,
+                           "allow_short":  false,
+                           "coverage_ratio":  0.0,
+                           "adx":  null,
+                           "realized_vol":  null,
+                           "low_vol_cut":  null,
+                           "high_vol_cut":  null,
+                           "trend_ema":  null,
+                           "trend_slope":  null,
+                           "ema_distance":  null,
+                           "base_mask":  false,
+                           "uptrend":  false,
+                           "downtrend":  false,
+                           "bars_seen":  60,
+                           "base_strategy_state":  {
+                                                       "closes_count":  60,
+                                                       "prev_macd":  -379.55664273464936,
+                                                       "prev_signal":  164.658386710959,
+                                                       "prev_histogram":  -544.2150294456084
+                                                   }
+                       },
+    "event_counts":  {
+                         "runtime_stopped":  3,
+                         "protective_order_canceled":  6,
+                         "execution_snapshot":  9,
+                         "rest_fill_reconciled":  6,
+                         "validation_probe_signal_override":  6,
+                         "protective_orders_created":  3,
+                         "entry_size_rounded":  3,
+                         "preflight_check":  15,
+                         "preflight_endpoint":  12,
+                         "preflight_credentials":  3,
+                         "preflight_environment":  3,
+                         "runtime_profile":  3,
+                         "runtime_started":  3
+                     },
+    "log_signals":  {
+                        "user_stream_no_running_event_loop":  0,
+                        "user_stream_disconnect_count":  14,
+                        "user_stream_dns_reconnect_count":  14
+                    },
+    "warnings":  [
+
+                 ],
+    "issues":  [
+
+               ],
+    "recent_errors":  [
+
+                      ],
+    "artifacts":  {
+                      "doctor_preflight":  "out\\operational_validation\\macd_final_candidate_testnet\\doctor_preflight.txt",
+                      "run_stdout":  "out\\operational_validation\\macd_final_candidate_testnet\\run_stdout.log",
+                      "run_stderr":  "out\\operational_validation\\macd_final_candidate_testnet\\run_stderr.log",
+                      "status_final":  "out\\operational_validation\\macd_final_candidate_testnet\\status_final.txt",
+                      "status_snapshots":  "out\\operational_validation\\macd_final_candidate_testnet\\status_snapshots"
+                  }
+}

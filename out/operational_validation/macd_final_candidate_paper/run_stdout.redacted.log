@@ -1,0 +1,918 @@
+﻿                     Runtime Profile                     
++-------------------------------------------------------+
+| key                   | value                         |
+|-----------------------+-------------------------------|
+| mode                  | paper                         |
+| BINANCE_ENV           | testnet                       |
+| LIVE_TRADING          | False                         |
+| budget_guard          | True                          |
+| budget_usdt_mode      | risk                          |
+| budget_usdt_fixed     | -                             |
+| dry_run               | False                         |
+| preset                | macd_final_candidate_ops.yaml |
+| sleep_mode            | False                         |
+| allocation_pct        | 10.00%                        |
+| leverage              | 20.0                          |
+| fixed_notional        | 250.00 USDT                   |
+| daily_loss_limit      | 2.00%                         |
+| max_dd                | 20.00%                        |
+| risk_per_trade        | 0.50%                         |
+| max_position_notional | 1000.00 USDT                  |
+| min_entry_notional    | 250.00 USDT                   |
+| protective_mode       | halt                          |
+| sl/tp                 | SL(pct)=0.0100 TP(pct)=0.0200 |
++-------------------------------------------------------+
+[23:31:39] INFO     ts=2026-03-09 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-09 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-09 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-16 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=long qty=0.003399 entry=73565.9559 unrealized=-0.02   
+                    realized=0.00 equity=9999.85 signal=long budget_cap=999.98 
+                    exposure=250.00 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=long qty=0.003399 entry=73565.9559 unrealized=-0.41   
+                    realized=0.00 equity=9999.46 signal=hold budget_cap=999.95 
+                    exposure=249.61 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=long qty=0.003399 entry=73565.9559 unrealized=-0.09   
+                    realized=0.00 equity=9999.79 signal=hold budget_cap=999.98 
+                    exposure=249.94 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=exit budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-16 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-16 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 12:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 16:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 20:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-19 00:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-19 04:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-19 08:00:00+00:00 symbol=BTC/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-0.91 equity=9998.84 signal=hold budget_cap=999.88
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-09 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-09 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-09 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:31:40] INFO     ts=2026-03-13 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-16 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=long qty=0.367242 entry=680.8181 unrealized=-0.03     
+                    realized=0.00 equity=9999.85 signal=long budget_cap=999.98 
+                    exposure=250.00 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=long qty=0.367242 entry=680.8181 unrealized=-0.79     
+                    realized=0.00 equity=9999.09 signal=hold budget_cap=999.91 
+                    exposure=249.24 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=long qty=0.367242 entry=680.8181 unrealized=-1.25     
+                    realized=0.00 equity=9998.63 signal=hold budget_cap=999.86 
+                    exposure=248.78 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-16 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-16 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-17 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 12:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 16:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-18 20:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-19 00:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-19 04:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-19 08:00:00+00:00 symbol=BNB/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=-3.27 equity=9996.48 signal=hold budget_cap=999.65
+                    exposure=0.00 open_protective=0 halted=False               
+           INFO     ts=2026-03-09 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-09 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-09 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-10 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-11 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-12 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-13 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-14 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-15 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=0.00 equity=10000.00 signal=hold                  
+                    budget_cap=1000.00 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-16 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=long qty=0.111850 entry=2235.3535 unrealized=-0.02    
+                    realized=0.00 equity=9999.85 signal=long budget_cap=999.98 
+                    exposure=250.00 open_protective=2 halted=False             
+           INFO     ts=2026-03-16 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=long qty=0.111850 entry=2235.3535 unrealized=1.43     
+                    realized=0.00 equity=10001.30 signal=hold                  
+                    budget_cap=1000.13 exposure=251.45 open_protective=2       
+                    halted=False                                               
+           INFO     ts=2026-03-16 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=long qty=0.111850 entry=2235.3535 unrealized=3.81     
+                    realized=0.00 equity=10003.68 signal=hold                  
+                    budget_cap=1000.37 exposure=253.83 open_protective=2       
+                    halted=False                                               
+           INFO     ts=2026-03-16 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=exit                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-16 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-16 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:31:41] INFO     ts=2026-03-18 12:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 16:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 20:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-19 00:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-19 04:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-19 08:00:00+00:00 symbol=ETH/USDT broker=paper  
+                    side=flat qty=0.000000 entry=0.0000 unrealized=0.00        
+                    realized=4.23 equity=10003.98 signal=hold                  
+                    budget_cap=1000.40 exposure=0.00 open_protective=0         
+                    halted=False                                               
+{
+    'run_id': '185d99c7961f4681a49b8f18fe7442fa',
+    'processed_total': 180,
+    'halted': False,
+    'halt_reason': '',
+    'account': {
+        'equity': 10000.048901040731,
+        'peak_equity': 10000.048901040731,
+        'realized_pnl': 0.04890104073099044,
+        'unrealized_pnl': 0.0,
+        'drawdown_pct': 0.0
+    },
+    'symbols': {
+        'BTC/USDT': {
+            'run_id': '185d99c7961f4681a49b8f18fe7442fa',
+            'processed_bars': 60,
+            'processed_total': 60,
+            'halted': False,
+            'halt_reason': ''
+        },
+        'ETH/USDT': {
+            'run_id': '185d99c7961f4681a49b8f18fe7442fa',
+            'processed_bars': 60,
+            'processed_total': 60,
+            'halted': False,
+            'halt_reason': ''
+        },
+        'BNB/USDT': {
+            'run_id': '185d99c7961f4681a49b8f18fe7442fa',
+            'processed_bars': 60,
+            'processed_total': 60,
+            'halted': False,
+            'halt_reason': ''
+        }
+    }
+}
+

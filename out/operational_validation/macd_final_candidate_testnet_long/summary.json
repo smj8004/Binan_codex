@@ -1,0 +1,226 @@
+﻿{
+    "verdict":  "FAIL",
+    "mode":  "live",
+    "out_dir":  "out/operational_validation/macd_final_candidate_testnet_long",
+    "run_id":  "301a138e8d1e49aa9462eea7b02507af",
+    "previous_latest_run_id":  "49b328502fd047698b140eb520e574bc",
+    "attempted_process_started":  true,
+    "fresh_run_id_detected":  true,
+    "fresh_run_id_detection_source":  "status",
+    "startup_phase":  "status_written",
+    "startup_failure_reason":  "",
+    "first_status_seen":  true,
+    "first_event_seen":  true,
+    "first_event_type":  "runtime_started",
+    "first_event_ts":  "2026-03-19T22:36:43.733212+00:00",
+    "first_bar_seen":  false,
+    "first_order_seen":  false,
+    "start_utc":  "2026-03-19T22:36:39.8798747Z",
+    "end_utc":  "2026-03-19T22:44:54.7081756Z",
+    "duration_minutes":  8.25,
+    "duration_hours":  0.14,
+    "command":  "uv run --active trader run --mode live --env testnet --data-mode websocket --symbols BTC/USDT,ETH/USDT,BNB/USDT --timeframe 4h --strategy macd_final_candidate --preset macd_final_candidate_ops --halt-on-error --budget-usdt auto --yes-i-understand-live-risk",
+    "startup_stalled_before_run_id":  false,
+    "candidate":  {
+                      "strategy":  "macd_final_candidate",
+                      "timeframe":  "4h",
+                      "symbols":  "BTC/USDT,ETH/USDT,BNB/USDT",
+                      "preset":  "macd_final_candidate_ops",
+                      "fixed_params_ok":  true
+                  },
+    "whether_fixed_params_loaded":  true,
+    "processed_bars_total":  0,
+    "last_bar_ts":  "",
+    "updated_at":  "2026-03-19T22:36:47.211210+00:00",
+    "orders":  0,
+    "fills":  0,
+    "trades":  0,
+    "open_positions_final_state":  {
+                                       "BTC/USDT":  {
+                                                        "symbol":  "BTC/USDT",
+                                                        "qty":  0.0,
+                                                        "entry_price":  0.0,
+                                                        "entry_ts":  "",
+                                                        "fee_pool":  0.0
+                                                    },
+                                       "ETH/USDT":  {
+                                                        "symbol":  "ETH/USDT",
+                                                        "qty":  0.0,
+                                                        "entry_price":  0.0,
+                                                        "entry_ts":  "",
+                                                        "fee_pool":  0.0
+                                                    },
+                                       "BNB/USDT":  {
+                                                        "symbol":  "BNB/USDT",
+                                                        "qty":  0.0,
+                                                        "entry_price":  0.0,
+                                                        "entry_ts":  "",
+                                                        "fee_pool":  0.0
+                                                    }
+                                   },
+    "open_orders_final_state":  {
+                                    "BTC/USDT":  {
+                                                     "_broker_open_orders":  {
+
+                                                                             }
+                                                 },
+                                    "ETH/USDT":  {
+                                                     "_broker_open_orders":  {
+
+                                                                             }
+                                                 },
+                                    "BNB/USDT":  {
+                                                     "_broker_open_orders":  {
+
+                                                                             }
+                                                 }
+                                },
+    "open_position_symbols":  0,
+    "open_order_total":  0,
+    "protective_orders_created_count":  0,
+    "protective_orders_canceled_count":  0,
+    "protective_lifecycle_anomaly_count":  0,
+    "protective_orders_missing_detected":  false,
+    "fills_accounted_count":  0,
+    "fills_reconciled_count":  0,
+    "fills_from_user_stream_count":  0,
+    "fills_from_rest_reconcile_count":  0,
+    "fills_from_aggregated_fallback_count":  0,
+    "accounting_consistency_pass":  true,
+    "fill_provenance_consistency_pass":  true,
+    "fill_provenance_breakdown":  {
+                                      "by_source":  {
+
+                                                    },
+                                      "fills_with_source_history_count":  0,
+                                      "fills_reconciled_count":  0
+                                  },
+    "partial_fill_audit_summary":  {
+                                       "partial_fill_groups_count":  0,
+                                       "partial_fill_rows_count":  0,
+                                       "aggregated_fallback_fill_count":  0,
+                                       "reconciled_missing_ws_fill_count":  0,
+                                       "trade_query_unavailable_count":  0,
+                                       "fills_with_multiple_source_history_count":  0
+                                   },
+    "user_stream_no_running_event_loop_count":  0,
+    "user_stream_disconnect_count":  19,
+    "user_stream_dns_reconnect_count":  19,
+    "websocket_reconnect_count":  0,
+    "accounting_degraded_mode_used":  true,
+    "symbols_halted":  0,
+    "halt_reason_summary":  "",
+    "budget_guard_triggered_count":  0,
+    "min_notional_block_count":  0,
+    "volatility_breaker_trigger_count":  0,
+    "drawdown_halt":  false,
+    "daily_loss_halt":  false,
+    "halt_on_error_triggered":  false,
+    "runtime":  {
+                    "exit_code":  0,
+                    "halted":  false,
+                    "halt_reason":  "",
+                    "broker":  "live_binance",
+                    "env":  "testnet",
+                    "live_trading":  true,
+                    "account_total_usdt":  4947.79587233,
+                    "account_available_usdt":  4947.79587233
+                },
+    "per_symbol":  {
+                       "BNB/USDT":  {
+                                        "qty":  0.0,
+                                        "entry_price":  0.0,
+                                        "open_orders":  0,
+                                        "processed_bars":  0,
+                                        "halted":  false,
+                                        "halt_reason":  "",
+                                        "last_signal":  "hold"
+                                    },
+                       "BTC/USDT":  {
+                                        "qty":  0.0,
+                                        "entry_price":  0.0,
+                                        "open_orders":  0,
+                                        "processed_bars":  0,
+                                        "halted":  false,
+                                        "halt_reason":  "",
+                                        "last_signal":  "hold"
+                                    },
+                       "ETH/USDT":  {
+                                        "qty":  0.0,
+                                        "entry_price":  0.0,
+                                        "open_orders":  0,
+                                        "processed_bars":  0,
+                                        "halted":  false,
+                                        "halt_reason":  "",
+                                        "last_signal":  "hold"
+                                    }
+                   },
+    "strategy_state":  {
+                           "profile_name":  "macd_final_candidate",
+                           "regime_name":  "trend_tight_high_adx_extreme_vol_strict_trend",
+                           "regime_params":  {
+                                                 "adx_window":  14,
+                                                 "low_adx_threshold":  18.0,
+                                                 "high_adx_threshold":  30.0,
+                                                 "vol_window":  20,
+                                                 "vol_percentile_window":  160,
+                                                 "low_vol_quantile":  0.2,
+                                                 "high_vol_quantile":  0.8,
+                                                 "trend_ema_span":  100,
+                                                 "trend_slope_lookback":  16,
+                                                 "trend_slope_threshold":  0.003,
+                                                 "trend_distance_threshold":  0.005,
+                                                 "min_coverage_ratio":  0.2
+                                             },
+                           "fixed_params":  {
+                                                "fast_period":  12,
+                                                "slow_period":  26,
+                                                "signal_period":  9,
+                                                "allow_short":  true,
+                                                "use_histogram":  false,
+                                                "histogram_threshold":  0.0,
+                                                "adx_filter":  false
+                                            },
+                           "base_signal":  "hold",
+                           "gated_signal":  "hold",
+                           "allow_long":  false,
+                           "allow_short":  false,
+                           "coverage_ratio":  0.0,
+                           "base_strategy_state":  {
+                                                       "closes_count":  0,
+                                                       "prev_macd":  null,
+                                                       "prev_signal":  null,
+                                                       "prev_histogram":  null
+                                                   }
+                       },
+    "event_counts":  {
+                         "preflight_check":  15,
+                         "preflight_endpoint":  12,
+                         "preflight_credentials":  3,
+                         "preflight_environment":  3,
+                         "runtime_profile":  3,
+                         "runtime_started":  3
+                     },
+    "log_signals":  {
+                        "user_stream_no_running_event_loop":  0,
+                        "user_stream_disconnect_count":  19,
+                        "user_stream_dns_reconnect_count":  19
+                    },
+    "warnings":  [
+                     "entry_protective_exit_cycle_not_observed"
+                 ],
+    "issues":  [
+                   "fills_missing"
+               ],
+    "recent_errors":  [
+
+                      ],
+    "artifacts":  {
+                      "doctor_preflight":  "out\\operational_validation\\macd_final_candidate_testnet_long\\doctor_preflight.txt",
+                      "run_stdout":  "out\\operational_validation\\macd_final_candidate_testnet_long\\run_stdout.log",
+                      "run_stderr":  "out\\operational_validation\\macd_final_candidate_testnet_long\\run_stderr.log",
+                      "status_final":  "out\\operational_validation\\macd_final_candidate_testnet_long\\status_final.txt",
+                      "status_snapshots":  "out\\operational_validation\\macd_final_candidate_testnet_long\\status_snapshots",
+                      "reconciliation_audit":  "out\\operational_validation\\macd_final_candidate_testnet_long\\reconciliation_audit.json"
+                  }
+}

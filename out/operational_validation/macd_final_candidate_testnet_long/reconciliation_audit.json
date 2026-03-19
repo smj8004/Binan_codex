@@ -1,0 +1,33 @@
+﻿{
+    "run_id":  "301a138e8d1e49aa9462eea7b02507af",
+    "previous_latest_run_id":  "49b328502fd047698b140eb520e574bc",
+    "startup_phase":  "status_written",
+    "startup_failure_reason":  "",
+    "accounting_consistency_pass":  true,
+    "fill_provenance_consistency_pass":  true,
+    "fills_accounted_count":  0,
+    "fills_count":  0,
+    "fills_reconciled_count":  0,
+    "fills_from_user_stream_count":  0,
+    "fills_from_rest_reconcile_count":  0,
+    "fills_from_aggregated_fallback_count":  0,
+    "fill_provenance_breakdown":  {
+                                      "by_source":  {
+
+                                                    },
+                                      "fills_with_source_history_count":  0,
+                                      "fills_reconciled_count":  0
+                                  },
+    "partial_fill_audit_summary":  {
+                                       "partial_fill_groups_count":  0,
+                                       "partial_fill_rows_count":  0,
+                                       "aggregated_fallback_fill_count":  0,
+                                       "reconciled_missing_ws_fill_count":  0,
+                                       "trade_query_unavailable_count":  0,
+                                       "fills_with_multiple_source_history_count":  0
+                                   },
+    "open_position_symbols":  0,
+    "open_order_total":  0,
+    "protective_orders_missing_detected":  false,
+    "protective_lifecycle_anomaly_count":  0
+}

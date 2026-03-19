@@ -1,0 +1,192 @@
+﻿                     Runtime Profile                     
++-------------------------------------------------------+
+| key                   | value                         |
+|-----------------------+-------------------------------|
+| mode                  | live                          |
+| BINANCE_ENV           | testnet                       |
+| LIVE_TRADING          | True                          |
+| budget_guard          | True                          |
+| budget_usdt_mode      | auto                          |
+| budget_usdt_fixed     | -                             |
+| dry_run               | False                         |
+| preset                | macd_final_candidate_ops.yaml |
+| sleep_mode            | False                         |
+| allocation_pct        | 10.00%                        |
+| leverage              | 20.0                          |
+| fixed_notional        | 250.00 USDT                   |
+| daily_loss_limit      | 2.00%                         |
+| max_dd                | 20.00%                        |
+| risk_per_trade        | 0.50%                         |
+| max_position_notional | 1000.00 USDT                  |
+| min_entry_notional    | 250.00 USDT                   |
+| protective_mode       | halt                          |
+| sl/tp                 | SL(pct)=0.0100 TP(pct)=0.0200 |
++-------------------------------------------------------+
+[07:36:44] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=Es827OpIHCNsk4iXVMJBjFhMdYcwyx9ipXT68tJfbFtG5LZrHRDvsYM9
+                    bJDc9VEM "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 1.0s (1/20)
+[07:36:45] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=XMSTKtfDqAr6nDgRhBZN5m26G4wlzFQsWKMk5Bs157sCYh5nIzqnQVZy
+                    bke9mGF4 "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 2.0s (2/20)
+[07:36:48] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=5WBq3VMsiTabrdW9ue4bVp7dDycLVqPgRRvXsnh9aIxL1nvZgkasxBIh
+                    PQ0pbvYL "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 4.0s (3/20)
+[07:36:52] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=JiwdoYYgX7hUkfEDjSxvCSeH8KBt4DzMju7odh49zEd00RsOKEv9TA5f
+                    DuHoIewO "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 8.0s (4/20)
+[07:37:01] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=sm9SJWHGlcdfR3IPWuKNUNK7xc3iLaPmnN8OhcZX5Tjxj7oso6VpJIKG
+                    3mhqY5dG "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 16.0s (5/20)
+[07:37:17] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=smZrTVevfIEHTeJDWUWM26BfS60UbupzV2c8nVTGjDsRzspr2ATB5J45
+                    yeskQEDT "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (6/20)
+[07:37:48] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=kMwjrwSrvLOYfv13lc5oUe62L1CKyCtiy6R8GoUNqhl0tq4alZHSkTQT
+                    AYRcS5K7 "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (7/20)
+[07:38:18] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=s9ddtjwwtMo4CanAfEUBnaFq4a5a2C61nZ0vZ44sgLTGHdOoxwxgJHXW
+                    uTKxxi1j "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (8/20)
+[07:38:49] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=cducLvb1ywaqoN4nARlLyJcV0vJ9UHSAaNE4bKS49i8t61qZ0sioWPGE
+                    NWKaYmpb "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (9/20)
+[07:39:19] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[07:39:20] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=MwPFoSsmapLZjc4wqQ4KH806XJXAw7UhaxgCqZczXssZRuwHnNEB6Pg6
+                    tPDlH9Ym "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (10/20)
+[07:39:50] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=3SNGHprIGevFUdWs3u0R9dlvvpMru3fvd5dnVGY0NWNa1rIQYJ2f7SLS
+                    yqdoVVZ4 "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (11/20)
+[07:40:20] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[07:40:21] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=WxOagOTEvkFNSRSYYB8q2uSUlnqzXafQrEMrwHVJJo2P3dzoOYome8wo
+                    FcY4x0Lj "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (12/20)
+[07:40:51] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=zATLVXC8y6CmwOSme9qmKe9Myo8KNC4jbz9d8J3MX9Q5NarkKdhhwOhL
+                    jrjdAGQm "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (13/20)
+[07:41:21] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[07:41:22] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=A4AOrlODPiTTUw6O85fbGvRhdzlaIE8rbXE2NreluV1hl8JuimNFI2P4
+                    dXVSPNEb "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (14/20)
+[07:41:52] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=WRZ7GWV2TzhuSLbCWzAs9zZSKi9dMkagmhrjhCOw79zhFL7CiIExKtGr
+                    YQf61SwA "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (15/20)
+[07:42:22] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[07:42:23] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=XAGYm8FV1dva16vgVGyAFzNtRPX2BG0S0YpISaOMSa8LpbkwM50snDqN
+                    M2selvOS "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (16/20)
+[07:42:53] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=ya3W6vmXr4lbqbO2h32YAZEBLn23kDkYuVIS4qwsHXaFxPoYVYTLQ7XR
+                    nqnmtJBO "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (17/20)
+[07:43:23] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[07:43:24] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=nDusytcwu9J5WOzQXuw41xcjPO3hGRBL8vDSF7lg12KT7ZNslruxR5tH
+                    QXipJtwN "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (18/20)
+[07:43:54] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=d24w1QTfIyOujeS7CJbn7DRr1VHtbxdjsyFiqiyKUEj4AhV2lAKWiayn
+                    tsA1Lyva "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (19/20)
+[07:44:25] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=Ba57vfNaKF8JBIOgbwFvOaGLIBN5nuPA0L4HXyWBcs61x2muhmPPC86Q
+                    WXWpgGwF "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (20/20)
+[07:44:55] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=kJWjkMF5ptps7L0RuXOntbg46hrQiemNjg0Nq3t2fpkN9ZG4uDA0d9uN
+                    PafYn924 "HTTP/1.1 200 OK"                                 
+

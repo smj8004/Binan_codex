@@ -1,0 +1,1073 @@
+﻿                     Runtime Profile                     
++-------------------------------------------------------+
+| key                   | value                         |
+|-----------------------+-------------------------------|
+| mode                  | live                          |
+| BINANCE_ENV           | testnet                       |
+| LIVE_TRADING          | True                          |
+| budget_guard          | True                          |
+| budget_usdt_mode      | auto                          |
+| budget_usdt_fixed     | -                             |
+| dry_run               | False                         |
+| preset                | macd_final_candidate_ops.yaml |
+| sleep_mode            | False                         |
+| allocation_pct        | 10.00%                        |
+| leverage              | 20.0                          |
+| fixed_notional        | 250.00 USDT                   |
+| daily_loss_limit      | 2.00%                         |
+| max_dd                | 20.00%                        |
+| risk_per_trade        | 0.50%                         |
+| max_position_notional | 1000.00 USDT                  |
+| min_entry_notional    | 250.00 USDT                   |
+| protective_mode       | halt                          |
+| sl/tp                 | SL(pct)=0.0100 TP(pct)=0.0200 |
++-------------------------------------------------------+
+[23:31:58] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[23:31:59] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=eiCwYuyGj7UquP8Ouu5ndmzNfJ0Bxplqo8CQZpGXYGCi7KvFsPYCIaF0
+                    K6kKBytS "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 1.0s (1/20)
+[23:32:00] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[23:32:01] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=2GAOwayjuUJfDnMKpuq0mGlKKfXVgXF4DVWbi8LPecxCC9oU0CmUaYls
+                    M63ffhZi "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 2.0s (2/20)
+[23:32:02] INFO     ts=2026-03-09 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:03] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=iN64v1zDWbILtkBh6x2zaClX8vgedkzmPtFOgXGY6PCd1neBXifFfov3
+                    Poyh62mT "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 4.0s (3/20)
+           INFO     ts=2026-03-09 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:05] INFO     ts=2026-03-09 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:06] INFO     ts=2026-03-10 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:08] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     ts=2026-03-10 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=EQeGmknbF8ENIHr11TObJBzsQI0Jizn1SJrG65xvadzWH8ui9tS0ER9Q
+                    uRPHxCjr "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 8.0s (4/20)
+[23:32:09] INFO     ts=2026-03-10 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:11] INFO     ts=2026-03-10 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:12] INFO     ts=2026-03-10 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:13] INFO     ts=2026-03-10 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:15] INFO     ts=2026-03-11 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:16] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[23:32:17] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=vpi9E52gIVuT1BsWtLNntg5Nn1clkWiwpkMvhjvupe7rb1thw0aKR3yL
+                    G4T45e8W "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 16.0s (5/20)
+           INFO     ts=2026-03-11 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:18] INFO     ts=2026-03-11 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:20] INFO     ts=2026-03-11 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:21] INFO     ts=2026-03-11 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:23] INFO     ts=2026-03-11 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:24] INFO     ts=2026-03-12 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:26] INFO     ts=2026-03-12 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:27] INFO     ts=2026-03-12 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:29] INFO     ts=2026-03-12 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:30] INFO     ts=2026-03-12 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:31] INFO     ts=2026-03-12 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:33] INFO     ts=2026-03-13 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=dY3VIjDhtmUVylPPLjjjp3hrfgmVUQVYd2VLlR7D5LwVD50OZbHZSMUn
+                    MMHv0NAA "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (6/20)
+[23:32:34] INFO     ts=2026-03-13 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:36] INFO     ts=2026-03-13 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:37] INFO     ts=2026-03-13 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:38] INFO     ts=2026-03-13 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:40] INFO     ts=2026-03-13 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:41] INFO     ts=2026-03-14 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:42] INFO     ts=2026-03-14 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:44] INFO     ts=2026-03-14 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:45] INFO     ts=2026-03-14 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:46] INFO     ts=2026-03-14 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:48] INFO     ts=2026-03-14 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:49] INFO     ts=2026-03-15 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:51] INFO     ts=2026-03-15 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:52] INFO     ts=2026-03-15 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:53] INFO     ts=2026-03-15 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:55] INFO     ts=2026-03-15 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:32:56] INFO     ts=2026-03-15 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.73 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:03] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[23:33:04] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=cEC1sJLvq5psIxCRSn8Z55wwpONbm67vrtcVlfgBPB2ChN3Z8nlVkggq
+                    ifRQzVRW "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (7/20)
+[23:33:08] INFO     ts=2026-03-16 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=long qty=0.004000 entry=69280.0000
+                    unrealized=17.11 realized=0.00 equity=10017.11 signal=long 
+                    budget_cap=4654.49 exposure=294.23 open_protective=2       
+                    halted=False                                               
+[23:33:09] INFO     ts=2026-03-16 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=long qty=0.004000 entry=69280.0000
+                    unrealized=16.66 realized=0.00 equity=10016.66 signal=hold 
+                    budget_cap=4934.62 exposure=293.78 open_protective=2       
+                    halted=False                                               
+[23:33:10] INFO     ts=2026-03-16 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=long qty=0.004000 entry=69280.0000
+                    unrealized=17.04 realized=0.00 equity=10017.04 signal=hold 
+                    budget_cap=4934.55 exposure=294.16 open_protective=2       
+                    halted=False                                               
+[23:33:22] INFO     ts=2026-03-16 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=exit  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:23] INFO     ts=2026-03-16 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:24] INFO     ts=2026-03-16 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:25] INFO     ts=2026-03-17 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:26] INFO     ts=2026-03-17 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:27] INFO     ts=2026-03-17 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:28] INFO     ts=2026-03-17 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:29] INFO     ts=2026-03-17 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:30] INFO     ts=2026-03-17 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:31] INFO     ts=2026-03-18 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:32] INFO     ts=2026-03-18 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:33] INFO     ts=2026-03-18 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:34] INFO     ts=2026-03-18 12:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=cUBKEYIPJRd3VUyGUYqORsIN7sa8OVPPotKqGUqFlW06GJZfEC6VqEvc
+                    2Y4CSh9M "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (8/20)
+[23:33:35] INFO     ts=2026-03-18 16:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:36] INFO     ts=2026-03-18 20:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-19 00:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:37] INFO     ts=2026-03-19 04:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:38] INFO     ts=2026-03-19 08:00:00+00:00 symbol=BTC/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.09 equity=9999.91 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:40] INFO     ts=2026-03-09 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:41] INFO     ts=2026-03-09 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:42] INFO     ts=2026-03-09 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:44] INFO     ts=2026-03-10 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:45] INFO     ts=2026-03-10 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:46] INFO     ts=2026-03-10 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:48] INFO     ts=2026-03-10 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:49] INFO     ts=2026-03-10 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:50] INFO     ts=2026-03-10 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:52] INFO     ts=2026-03-11 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:53] INFO     ts=2026-03-11 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:54] INFO     ts=2026-03-11 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:56] INFO     ts=2026-03-11 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:57] INFO     ts=2026-03-11 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:33:58] INFO     ts=2026-03-11 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:00] INFO     ts=2026-03-12 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:01] INFO     ts=2026-03-12 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:02] INFO     ts=2026-03-12 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:04] INFO     ts=2026-03-12 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:05] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=ti5366V3DhiLPHzxROJb3slR7GloMPCXclGQ4iU407f1wwRH5L8UUxTu
+                    Klh3MDxY "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (9/20)
+           INFO     ts=2026-03-12 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:06] INFO     ts=2026-03-12 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:08] INFO     ts=2026-03-13 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:09] INFO     ts=2026-03-13 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:10] INFO     ts=2026-03-13 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:12] INFO     ts=2026-03-13 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:13] INFO     ts=2026-03-13 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:14] INFO     ts=2026-03-13 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:16] INFO     ts=2026-03-14 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:17] INFO     ts=2026-03-14 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:19] INFO     ts=2026-03-14 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:21] INFO     ts=2026-03-14 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:22] INFO     ts=2026-03-14 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:24] INFO     ts=2026-03-14 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:25] INFO     ts=2026-03-15 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:27] INFO     ts=2026-03-15 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:28] INFO     ts=2026-03-15 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:29] INFO     ts=2026-03-15 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:31] INFO     ts=2026-03-15 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:32] INFO     ts=2026-03-15 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.41 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:35] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=e6kvhRtTtnjxeLnM1JoJR12Gmmzs5NJaYbGFsza7Lr3Mg6OnNEuLMaY4
+                    V9oifc8P "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (10/20)
+[23:34:44] INFO     ts=2026-03-16 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=long qty=0.370000 entry=637.1600  
+                    unrealized=16.13 realized=0.00 equity=10016.13 signal=long 
+                    budget_cap=4696.54 exposure=251.88 open_protective=2       
+                    halted=False                                               
+[23:34:45] INFO     ts=2026-03-16 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=long qty=0.370000 entry=637.1600  
+                    unrealized=15.36 realized=0.00 equity=10015.36 signal=hold 
+                    budget_cap=4936.53 exposure=251.11 open_protective=2       
+                    halted=False                                               
+[23:34:46] INFO     ts=2026-03-16 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=long qty=0.370000 entry=637.1600  
+                    unrealized=14.90 realized=0.00 equity=10014.90 signal=hold 
+                    budget_cap=4936.53 exposure=250.65 open_protective=2       
+                    halted=False                                               
+[23:34:58] INFO     ts=2026-03-16 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=exit  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:34:59] INFO     ts=2026-03-16 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:00] INFO     ts=2026-03-16 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:01] INFO     ts=2026-03-17 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:02] INFO     ts=2026-03-17 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:03] INFO     ts=2026-03-17 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-17 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:05] INFO     ts=2026-03-17 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:06] INFO     ts=2026-03-17 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=s5DMP1xkubSt4GteGoLWk2nEiYKuWFTUq9R4anPTUrwdob3tfeHZvTlr
+                    225JzeaH "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (11/20)
+[23:35:07] INFO     ts=2026-03-18 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:08] INFO     ts=2026-03-18 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:09] INFO     ts=2026-03-18 12:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:10] INFO     ts=2026-03-18 16:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:11] INFO     ts=2026-03-18 20:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:12] INFO     ts=2026-03-19 00:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:13] INFO     ts=2026-03-19 04:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:14] INFO     ts=2026-03-19 08:00:00+00:00 symbol=BNB/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.07 equity=9999.93 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:15] INFO     ts=2026-03-09 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:17] INFO     ts=2026-03-09 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:18] INFO     ts=2026-03-09 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:20] INFO     ts=2026-03-10 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:21] INFO     ts=2026-03-10 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:23] INFO     ts=2026-03-10 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:24] INFO     ts=2026-03-10 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:26] INFO     ts=2026-03-10 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:27] INFO     ts=2026-03-10 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:28] INFO     ts=2026-03-11 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:30] INFO     ts=2026-03-11 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:31] INFO     ts=2026-03-11 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:32] INFO     ts=2026-03-11 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:34] INFO     ts=2026-03-11 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:35] INFO     ts=2026-03-11 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:36] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+[23:35:37] INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=KJ3yI1b0hFtYpStOJcnIXKuKJY3jsoSjtViQWfZpGX6HhRLLPRSvhdTE
+                    4QbVWD8z "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (12/20)
+           INFO     ts=2026-03-12 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:38] INFO     ts=2026-03-12 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:39] INFO     ts=2026-03-12 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:41] INFO     ts=2026-03-12 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:42] INFO     ts=2026-03-12 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:43] INFO     ts=2026-03-12 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:45] INFO     ts=2026-03-13 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:46] INFO     ts=2026-03-13 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:48] INFO     ts=2026-03-13 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:49] INFO     ts=2026-03-13 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:50] INFO     ts=2026-03-13 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:52] INFO     ts=2026-03-13 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:53] INFO     ts=2026-03-14 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:54] INFO     ts=2026-03-14 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:55] INFO     ts=2026-03-14 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:57] INFO     ts=2026-03-14 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:35:58] INFO     ts=2026-03-14 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:00] INFO     ts=2026-03-14 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:01] INFO     ts=2026-03-15 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:02] INFO     ts=2026-03-15 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:04] INFO     ts=2026-03-15 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:05] INFO     ts=2026-03-15 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:06] INFO     ts=2026-03-15 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:07] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=l9NWntbAAr2NGgbE1IAtMfMYESn2REYk8ZfzEGLsI6fHbgBRzAYSiDNC
+                    q7avk79Z "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (13/20)
+[23:36:08] INFO     ts=2026-03-15 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=0.00 equity=10000.00 signal=hold  
+                    budget_cap=4948.15 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:20] INFO     ts=2026-03-16 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=long qty=0.112000 entry=2113.4612 
+                    unrealized=13.63 realized=0.00 equity=10013.63 signal=long 
+                    budget_cap=4697.82 exposure=250.33 open_protective=2       
+                    halted=False                                               
+[23:36:21] INFO     ts=2026-03-16 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=long qty=0.112000 entry=2113.4612 
+                    unrealized=15.08 realized=0.00 equity=10015.08 signal=hold 
+                    budget_cap=4936.07 exposure=251.79 open_protective=2       
+                    halted=False                                               
+[23:36:22] INFO     ts=2026-03-16 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=long qty=0.112000 entry=2113.4612 
+                    unrealized=17.47 realized=0.00 equity=10017.47 signal=hold 
+                    budget_cap=4936.07 exposure=254.17 open_protective=2       
+                    halted=False                                               
+[23:36:34] INFO     ts=2026-03-16 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=exit  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:35] INFO     ts=2026-03-16 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:36] INFO     ts=2026-03-16 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:37] INFO     ts=2026-03-17 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:38] INFO     HTTP Request: POST                                         
+                    https://testnet.binancefuture.com/fapi/v1/listenKey        
+                    "HTTP/1.1 200 OK"                                          
+           INFO     HTTP Request: DELETE                                       
+                    https://testnet.binancefuture.com/fapi/v1/listenKey?listenK
+                    ey=4oK0PsUDk1Cl9j8qJAKRTyFJizoAyoHR9BQap3V9RBenBWHvjQUdx4Is
+                    vnvuSOU3 "HTTP/1.1 200 OK"                                 
+[user-stream] disconnected (Cannot connect to host stream.binancefuture.com:443 ssl:default [Could not contact DNS servers]); reconnect in 30.0s (14/20)
+           INFO     ts=2026-03-17 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:39] INFO     ts=2026-03-17 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:40] INFO     ts=2026-03-17 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:41] INFO     ts=2026-03-17 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:42] INFO     ts=2026-03-17 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:43] INFO     ts=2026-03-18 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:44] INFO     ts=2026-03-18 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:45] INFO     ts=2026-03-18 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:46] INFO     ts=2026-03-18 12:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:47] INFO     ts=2026-03-18 16:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+           INFO     ts=2026-03-18 20:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:48] INFO     ts=2026-03-19 00:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:49] INFO     ts=2026-03-19 04:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+[23:36:50] INFO     ts=2026-03-19 08:00:00+00:00 symbol=ETH/USDT               
+                    broker=live_binance side=flat qty=0.000000 entry=0.0000    
+                    unrealized=0.00 realized=-0.17 equity=9999.83 signal=hold  
+                    budget_cap=4947.80 exposure=0.00 open_protective=0         
+                    halted=False                                               
+{
+    'run_id': '392e3990ee3547ee8c30a98f7f0356b8',
+    'processed_total': 180,
+    'halted': False,
+    'halt_reason': '',
+    'account': {
+        'equity': 9999.67028,
+        'peak_equity': 10017.30244,
+        'realized_pnl': -0.32971999999999047,
+        'unrealized_pnl': 0.0,
+        'drawdown_pct': 0.001760170475595544
+    },
+    'symbols': {
+        'BTC/USDT': {
+            'run_id': '392e3990ee3547ee8c30a98f7f0356b8',
+            'processed_bars': 60,
+            'processed_total': 60,
+            'halted': False,
+            'halt_reason': ''
+        },
+        'ETH/USDT': {
+            'run_id': '392e3990ee3547ee8c30a98f7f0356b8',
+            'processed_bars': 60,
+            'processed_total': 60,
+            'halted': False,
+            'halt_reason': ''
+        },
+        'BNB/USDT': {
+            'run_id': '392e3990ee3547ee8c30a98f7f0356b8',
+            'processed_bars': 60,
+            'processed_total': 60,
+            'halted': False,
+            'halt_reason': ''
+        }
+    }
+}
+
