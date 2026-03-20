@@ -1,251 +1,279 @@
-# Plan: Binance Futures Historical Research Pipeline
+# Plan
 
-Date: 2026-03-11
-Status: Active
+Date: 2026-03-20
+Status: planning only
 
-## 1. Data pipeline
+## 1. Problem Statement
 
-- Source:
-  - Binance USDT-M Futures public mainnet endpoint
-  - primary endpoint: `/fapi/v1/klines`
-- Scope:
-  - last 365 days
-  - symbols:
-    - `BTCUSDT`
-    - `ETHUSDT`
-    - `XRPUSDT`
-    - `TRXUSDT`
-    - `ADAUSDT`
-    - `SOLUSDT`
-  - default interval: `1h`
-  - design must remain extensible to `15m` and `4h`
-- Implementation:
-  - add `trader/data/binance_futures_historical.py`
-  - add `scripts/fetch_futures_historical.py`
-- Required behavior:
-  - paginate until full requested range is covered
-  - respect rate limits with conservative delay/retry
-  - save local files
-  - deduplicate rows by timestamp
-  - merge with existing files on rerun
-  - avoid unnecessary re-download when cached data already covers the requested window
-- File structure:
-  - `data/futures_historical/BTCUSDT/1h.csv`
-  - `data/futures_historical/ETHUSDT/1h.csv`
-  - `data/futures_historical/XRPUSDT/1h.csv`
-  - `data/futures_historical/TRXUSDT/1h.csv`
-  - `data/futures_historical/ADAUSDT/1h.csv`
-  - `data/futures_historical/SOLUSDT/1h.csv`
+The repository already contains meaningful strategy research and meaningful Binance Futures runtime validation, but those two strengths are not yet joined into one disciplined system that can reliably discover robust candidates, reject overfit candidates early, and validate execution realism before any live progression.
 
-## 2. Strategy search framework
+## 2. Goals
 
-- Add:
-  - `trader/research/strategy_search.py`
-  - `scripts/run_strategy_search.py`
-- Compare at least these 3 strategy families in the same framework:
-  - `EMA cross trend-following`
-  - `Donchian breakout`
-  - `RSI mean-reversion`
-- Strategy stance definition:
-  - EMA cross:
-    - compare `long/flat` and `long/short`
-  - Donchian breakout:
-    - compare `long/flat` and `long/short`
-  - RSI mean-reversion:
-    - compare `long/flat` and `long/short`
-- Parameter sweep ranges:
-  - EMA cross:
-    - `fast_len`: `[8, 21]`
-    - `slow_len`: `[55, 89]`
-    - `allow_short`: `[False, True]`
-  - Donchian breakout:
-    - `entry_period`: `[20, 55]`
-    - `exit_period`: `[10, 20]`
-    - `allow_short`: `[False, True]`
-  - RSI mean-reversion:
-    - `rsi_period`: `[7, 14]`
-    - `lower`: `[20, 30]`
-    - `upper`: `[70]`
-    - `exit_threshold`: `[50]`
-    - `allow_short`: `[False, True]`
-- Common execution assumptions:
-  - same backtest engine for all strategies
-  - same cost model for all strategies
-  - fixed leverage, not swept in this task
-  - no live/testnet order path involved
+- Discover strategy candidates with realistic net profitability potential on Binance USDT-M Futures.
+- Reject candidates that fail holdout, cost stress, breadth, or regime robustness.
+- Validate that the runtime layer can support shortlisted candidates safely under Binance constraints.
+- Produce a final shortlist with explicit promotion and rejection gates.
 
-## 3. Evaluation framework
+## 3. Non-Goals
 
-- Must include:
-  - train/test split
-  - rolling walk-forward OOS
-  - symbol-by-symbol comparison
-  - aggregate comparison across all six symbols
-- Default walk-forward structure:
-  - `train_days=180`
-  - `test_days=60`
-  - `step_days=60`
-- Per-window process:
-  1. evaluate parameter grid on train window
-  2. select best train configuration inside that strategy family
-  3. evaluate selected configuration on the next OOS window
-  4. roll forward
-- Required metrics per strategy/symbol aggregate:
-  - `total_return`
-  - `cagr`
-  - `max_drawdown`
-  - `sharpe_like`
-  - `trade_count`
-  - `win_rate`
-  - `fee_cost_total`
-  - `avg_trade_return`
-  - `oos_total_return`
-  - `oos_sharpe`
-  - `symbol_consistency_count`
-  - `symbol_return_std`
-- Ranking rule:
-  - sort primarily by OOS performance
-  - use hard-gate flags as filter/context, not as a hidden override
-- Hard gates for “top candidate” label:
-  - `oos_total_return > 0`
-  - drawdown not excessive
-  - trade count not trivially small
-  - fees do not consume the whole gross edge
-  - consistent positive behavior in at least 3 of 6 symbols
+- No broad runtime feature expansion for strategies that do not yet show robust edge.
+- No live deployment or live-money progression in this phase.
+- No architecture rewrite for style reasons.
+- No duplicate research framework if an existing repo path can be reused.
 
-## 4. Deliverables
+## 4. Current State Summary
 
-- Data collection script:
-  - `scripts/fetch_futures_historical.py`
-- Strategy search script:
-  - `scripts/run_strategy_search.py`
-- Core modules:
-  - `trader/data/binance_futures_historical.py`
-  - `trader/research/strategy_search.py`
-- Output artifacts:
-  - `out/strategy_search/summary.csv`
-  - `out/strategy_search/by_symbol.csv`
-  - `out/strategy_search/top_strategies.md`
-- Docs updates:
-  - `docs/research.md`
-  - `docs/plan.md`
-  - `docs/todo.md`
-  - `docs/decisions.md`
-  - `docs/notes.md`
-  - `guide/EXPERIMENT_LOG.md`
-  - `README.md` if command documentation is needed
+Based on `docs/research.md`:
+- The strongest current alpha survivor is the regime-gated MACD directional candidate.
+- Donchian was a temporary finalist but failed stricter holdout validation.
+- Track A, Track B, and Track C already exist in `trader/experiments/runner.py` and `guide/SYSTEM_CANDIDATES.md`, but they are not yet the center of the current shortlist flow.
+- The runtime layer is comparatively mature and already has regression tests for major failure classes.
+- The biggest execution gap is long-duration runtime validation, not short-path order semantics.
+- The biggest research gap is split evaluation logic and incomplete funding-aware integration into the main promotion ladder.
 
-## 5. Verification
+## 5. Main Repo Weaknesses Blocking Live-Viable Profitability
 
-- Required:
-  - `uv run --active pytest -q`
-- Functional checks:
-  - fetcher saves and reloads sorted candles without duplicate timestamps
-  - strategy search runs from saved local files
-  - output CSV/MD artifacts are generated deterministically
-- Final runnable commands:
-  - `uv run --active python scripts/fetch_futures_historical.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h --days 365`
-  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --interval 1h`
+- Research evidence is split across two partially different stacks.
+- Track A carry-aware logic is not yet promoted through the strongest existing holdout pipeline.
+- Funding, premium, and carry realism are present but not yet mandatory for candidate promotion where relevant.
+- The portfolio-system stack does not yet share one consistent gate schema with the directional finalist stack.
+- Long-run runtime validation still has an open FAIL artifact.
+- Execution realism is stronger in runtime than in some research paths.
 
-## 2026-03-12 Broad Sweep Discovery Plan (COMPLETED)
+## 6. Proposed System Changes
 
-### Why broaden now
+### 6.1 Research Stack Unification
 
-- the prior single-lever sequence improved some branches but produced zero hard-gate winners
-- the next useful step is discovery, not another narrow tweak on already-weak candidates
-- the sweep still stays historical-data-first, fee-inclusive, and OOS-ranked
+- Unify candidate evaluation outputs across `trader/research/strategy_search.py` and `trader/experiments/runner.py`.
+- Reuse the shared `BacktestEngine` cost and order-model realism as the primary evaluation kernel.
+- Standardize the same candidate summary fields across all tracks: walk-forward OOS return, stress return, trade count, turnover, concentration, breadth across symbols, regime coverage, parameter-neighborhood survival, and holdout survival.
 
-### Status: COMPLETED
-- Broad sweep framework implemented and executed
-- 8 strategy families tested across 1h/4h intervals
-- Result: No hard-gate pass on current 1-year/6-symbol/fee-inclusive setup
-- Finding: Trend-following families (donchian_breakout, ema_cross @ 4h) least-bad, mean-reversion families weaker
+### 6.2 Track Prioritization
 
-## 2026-03-14 Post-Sweep Next Actions
+- Track A: cross-sectional carry plus momentum must become a first-class candidate track, using observed funding and premium inputs whenever promotion is considered.
+- Track B: regime-switching trend versus mean-reversion must be evaluated under explicit regime-detection and coverage metrics.
+- Track C: breakout plus ATR risk must be evaluated under execution-aware assumptions, including limit-first entry, timeout, fallback, and protective lifecycle expectations.
+- MACD remains the current baseline-to-beat because it is the best existing survivor in repo evidence.
 
-### Current State
-- Historical research infrastructure is STRONG (data fetch, broad sweep, OOS ranking, family comparison)
-- Operational validation infrastructure is STRONG (testnet runners, budget guards, protective orders)
-- Strategy edge discovery is WEAK (zero hard-gate passes on current universe/intervals/families)
+### 6.3 Anti-Overfitting Defenses
 
-### Recommended Next Research Directions (Pick ONE)
+- Keep strict train, test, and holdout separation.
+- Add parameter-neighborhood and family-neighborhood survival as explicit promotion criteria.
+- Require universe expansion and regime robustness before shortlist promotion.
+- Require cost and slippage stress survival.
+- Require trade-level failure-case review for finalists.
 
-**Option A: Broader Universe Exploration**
-- Expand symbol universe beyond current 6 (test 15-20 symbols across market cap tiers)
-- Hypothesis: Edge may be concentrated in specific symbols not in current universe
-- Cost: More data fetch time, but same backtest framework
+### 6.4 Execution-Realism Hardening
 
-**Option B: Alternative Timeframe Exploration**
-- Test 15m, 2h, 8h, 1d intervals
-- Hypothesis: Current 1h/4h may be suboptimal for trend/mean-reversion balance
-- Cost: Minimal (just re-fetch and re-run search)
+- Ensure the research stack uses exchange constraints and execution assumptions that match Binance docs where relevant.
+- Tighten funding-aware evaluation for carry strategies.
+- Add explicit execution-aware simulation criteria before runtime promotion.
+- Strengthen long-run runtime observability, reconnect detection, and bar-ingestion verification before any candidate is considered paper or testnet ready.
 
-**Option C: Regime-Conditional Strategy Layers**
-- Add volatility regime filters (VIX-like, ATR percentile, realized vol buckets)
-- Add trend strength filters (ADX bands, slope consistency)
-- Hypothesis: Unconditional strategies fail, but regime-conditional may pass
-- Cost: Moderate implementation work on strategy layer
+## 7. Exact File-Level Change List
 
-**Option D: Portfolio Cross-Sectional Approach**
-- Shift from single-symbol directional to multi-symbol long/short cross-section
-- Use existing portfolio experiment suite
-- Hypothesis: Single-symbol edge is weak, but relative value edge may exist
-- Cost: Already implemented in `trader/experiments/`, just needs historical data input mode
+Planned research and evaluation files:
+- `trader/experiments/runner.py`
+- `trader/research/strategy_search.py`
+- `trader/backtest/engine.py`
+- `trader/backtest/metrics.py`
+- `trader/funding_rate.py`
+- `trader/strategy/carry.py`
+- `scripts/run_strategy_search.py`
+- `scripts/run_final_showdown.py`
+- `scripts/run_holdout_validation.py`
+- `tests/test_strategy_search.py`
 
-**Recommendation: Start with Option B (15m exploration) - lowest cost, fastest feedback**
+Planned runtime and observability files:
+- `trader/runtime.py`
+- `trader/broker/live_binance.py`
+- `trader/storage.py`
+- `tests/test_multisymbol_runtime_sync.py`
+- `tests/test_runtime_live_recovery.py`
+- `tests/test_runtime_protective_fail_safe.py`
+- `tests/test_live_testnet_order_path_smoke.py`
 
-### Families in scope
+Planned docs and validation files:
+- `docs/research.md`
+- `docs/plan.md`
+- `docs/todo.md`
+- `docs/decisions.md`
+- `docs/notes.md`
+- relevant new or updated outputs under `out/strategy_search_compare/*`
+- relevant new or updated outputs under `out/operational_validation/*`
 
-- `ema_cross`
-- `donchian_breakout`
-- `supertrend`
-- `price_adx_breakout`
-- `rsi_mean_reversion`
-- `bollinger`
-- `macd`
-- `stoch_rsi`
+## 8. Strategy Research Plan
 
-### Raw matrix size
+### 8.1 Candidate Tracks
 
-| family | raw combos |
-|---|---:|
-| ema_cross | 50 |
-| donchian_breakout | 12 |
-| supertrend | 12 |
-| price_adx_breakout | 30 |
-| rsi_mean_reversion | 54 |
-| bollinger | 36 |
-| macd | 16 |
-| stoch_rsi | 24 |
-| total | 234 |
+Ranked starting tracks:
+1. Track A: cross-sectional carry plus momentum
+2. Track B: regime switch trend versus range
+3. Track C: execution-aware breakout
+4. Existing MACD finalist as incumbent benchmark
 
-### Budgeted execution shape
+### 8.2 Required Research Evaluations
 
-- intervals: `2` (`1h`, `4h`)
-- symbols: `6`
-- walk-forward windows per symbol/interval on the latest 1-year data: `3`
-- raw combos: `234`
-- default selected combos after round-robin cap: `96`
-- approximate backtest count:
-  - `96 combos x 6 symbols x 2 intervals x 3 windows x 2 train/test passes = 6912`
-- observed broad-sweep runtime on this machine:
-  - about `495s` (`8.25` minutes) with `jobs=8`
-- conclusion:
-  - the capped default run is comfortably inside the 6-hour budget and leaves room for narrower follow-up sweeps
+Every candidate must be evaluated with:
+- walk-forward evaluation
+- strict IS versus OOS separation
+- holdout validation
+- fee stress
+- slippage stress
+- symbol expansion
+- timeframe robustness where applicable
+- parameter sensitivity and neighborhood survival
+- regime robustness
+- turnover analysis
+- concentration analysis
+- trade-level failure review
 
-### Ranking contract
+### 8.3 Candidate Scorecard
 
-- `rank_score` is composite, not pure return sort
-- score priorities:
-  - OOS total return first
-  - OOS sharpe bonus
-  - mean max drawdown penalty
-  - positive-symbol bonus
-  - fee-drag penalty
-  - trade-count penalty at extremes
-- hard gate remains explicit and separate from the score:
-  - positive OOS return
-  - positive OOS sharpe
-  - non-excessive drawdown
-  - positive symbols `>= 3`
-  - fee ratio not consuming the edge
+Each candidate result should produce:
+- baseline OOS metrics
+- stressed OOS metrics
+- holdout metrics
+- symbol breadth metrics
+- regime coverage metrics
+- turnover and fee burden metrics
+- concentration and dispersion metrics
+- promotion verdict with explicit reasons
+
+## 9. Execution And Runtime Validation Plan
+
+Before paper or testnet promotion:
+- confirm exchange-filter compatibility from exchange info
+- confirm one-way versus hedge assumptions
+- confirm reduce-only semantics
+- confirm protective stop and take-profit lifecycle assumptions
+- confirm websocket and REST reconciliation assumptions
+- confirm restart reconciliation and stale-state handling
+- confirm multisymbol isolation and budget-guard behavior
+
+Validation ladder:
+1. Execution-aware backtest or simulation
+2. Short paper operational validation
+3. Short testnet operational validation
+4. Long-run paper or testnet validation with reconnects and bar-ingestion evidence
+5. Only then mark live eligible
+
+## 10. Rollout Order
+
+1. Unify candidate evidence schema and promotion gates.
+2. Upgrade Track A, Track B, and Track C evaluation to the shared realism kernel.
+3. Re-run research and holdout promotion against the incumbent MACD baseline.
+4. Strengthen execution-aware simulation for surviving finalists.
+5. Close the long-run runtime validation gap.
+6. Produce the shortlist and explicit next-live blockers.
+
+## 11. Rollback And Safety Considerations
+
+- Keep changes incremental and test-backed.
+- Do not replace working runtime behaviors without preserving the existing regression suite.
+- If research unification causes result drift, record the drift and compare old versus new outputs before promoting anything.
+- If runtime validation changes alter protective-order or sizing behavior, rerun the focused runtime regressions before broader tests.
+
+## 12. Testing And Verification Plan
+
+Research verification:
+- unit and integration tests around candidate metrics and gate logic
+- reproducible script outputs for search, showdown, and holdout
+- comparison outputs stored in `out/strategy_search_compare/*`
+
+Runtime verification:
+- focused runtime regression tests for multisymbol isolation, protective fail-safe, min-notional, recovery, and shared budget
+- operational validation outputs for paper and testnet
+- explicit long-run validation artifact with non-zero processed bars and full entry-protective-exit observation
+
+## 13. Candidate Promotion Gates
+
+### Stage 1: Research Candidate Generation
+
+Pass criteria:
+- strategy family and parameter set are reproducible
+- data coverage is sufficient
+- trade count exceeds the minimum threshold
+
+Reject criteria:
+- insufficient data
+- trivial trade count
+- relies on unavailable live inputs
+
+### Stage 2: Walk-Forward And Cost-Stress Survival
+
+Pass criteria:
+- positive or clearly superior risk-adjusted OOS performance under baseline
+- survives predefined fee and slippage stress without collapsing
+- no single window dominates the full result
+
+Reject criteria:
+- negative or unstable OOS profile
+- strong dependence on one window only
+- collapse under modest cost stress
+
+### Stage 3: Robustness Across Symbols, Timeframes, And Regimes
+
+Pass criteria:
+- breadth across symbols
+- acceptable dispersion and concentration
+- acceptable regime coverage
+- reasonable parameter-neighborhood survival
+
+Reject criteria:
+- edge concentrated in one or two symbols
+- strong parameter brittleness
+- performance only in one narrow regime pocket
+
+### Stage 4: Execution-Aware Simulation Survival
+
+Pass criteria:
+- candidate remains viable under realistic order model, timeout, fallback, and funding assumptions
+- turnover and fee burden remain acceptable
+
+Reject criteria:
+- edge disappears when execution realism is applied
+- candidate requires unrealistic fill assumptions
+
+### Stage 5: Paper And Testnet Runtime Validation Survival
+
+Pass criteria:
+- entry, protective, and exit lifecycle observed
+- state reconciliation works after reconnect or restart
+- no multisymbol contamination
+- no unresolved protective-order failures
+
+Reject criteria:
+- runtime halts unexpectedly
+- fills cannot be reconciled
+- protective lifecycle is inconsistent
+
+### Stage 6: Tiny-Canary Live Eligibility
+
+Pass criteria:
+- every previous stage is passed
+- long-run runtime validation is clean
+- residual live-only risks are documented and accepted
+
+Reject criteria:
+- any prior gate remains open
+- long-run runtime evidence is missing or failing
+
+## 14. Criteria For Rejecting A Candidate
+
+- Fails holdout after looking good in walk-forward
+- Fails under cost stress or slippage stress
+- Fails breadth or concentration checks
+- Depends on proxy inputs that are unavailable or weakly modeled in live trading
+- Requires runtime behavior that the current Binance execution layer cannot support safely
+
+## 15. Criteria For Promotion Research To Forward To Runtime
+
+Research to forward:
+- passes Stages 1 through 4
+
+Forward to runtime:
+- passes Stage 4 and has an implementation profile supported by the current runtime architecture
+
+Runtime to live-eligible:
+- passes Stage 5 and Stage 6 with documented residual risks

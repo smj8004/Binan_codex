@@ -178,12 +178,15 @@ def test_macd_final_candidate_runner_scripts_reference_fixed_profile() -> None:
     assert "-Mode paper" in paper_script
     assert "-Mode live" in testnet_script
     assert "--strategy macd_final_candidate" in testnet_long_script
-    assert "--timeframe 4h" in testnet_long_script
+    assert '[string]$Timeframe = "4h"' in testnet_long_script
+    assert "--timeframe\", $effectiveTimeframe" in testnet_long_script
     assert "--preset $Preset" in testnet_long_script
     assert "out/operational_validation/macd_final_candidate_testnet_long" in testnet_long_script
     assert "doctor_preflight.txt" in testnet_long_script
     assert "status_final.txt" in testnet_long_script
     assert "summary.json" in testnet_long_script
+    assert "diagnostic_summary.json" in testnet_long_script
+    assert "diagnostic_summary.md" in testnet_long_script
     assert "reconciliation_audit.json" in testnet_long_script
     assert "fill_provenance_breakdown" in testnet_long_script
     assert "partial_fill_audit_summary" in testnet_long_script
@@ -200,6 +203,23 @@ def test_macd_final_candidate_runner_scripts_reference_fixed_profile() -> None:
     assert "first_event_seen" in testnet_long_script
     assert "first_bar_seen" in testnet_long_script
     assert "first_order_seen" in testnet_long_script
+    assert "ValidationMode" in testnet_long_script
+    assert "StopAfterFirstLiveBar" in testnet_long_script
+    assert "validation_mode=$ValidationMode" in testnet_long_script
+    assert "pipeline_proof_mode=$pipelineProofMode" in testnet_long_script
+    assert "strategy_evidence_allowed=$strategyEvidenceAllowed" in testnet_long_script
+    assert "evidence_scope = if ($pipelineProofMode)" in testnet_long_script
+    assert 'primary_verdict_source = "diagnostic_summary.json"' in testnet_long_script
+    assert "strategy_lifecycle_validation_applicable" in testnet_long_script
+    assert "strategy_lifecycle_verdict" in testnet_long_script
+    assert "runtime_validation_verdict" in testnet_long_script
+    assert "runtime_chain_proof_advanced" in testnet_long_script
+    assert "summary_interpretation" in testnet_long_script
+    assert "expected_next_close_utc" in testnet_long_script
+    assert "minutes_until_next_close" in testnet_long_script
+    assert "--realtime-only" in testnet_long_script
+    assert "--max-bars" in testnet_long_script
+    assert "python -m trader.runtime_diagnostics" in testnet_long_script
 
 
 def test_validation_probe_creates_and_closes_position_with_protective_orders(tmp_path: Path) -> None:

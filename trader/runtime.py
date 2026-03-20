@@ -5,6 +5,7 @@ import math
 import queue
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -325,6 +326,17 @@ class RuntimeEngine:
         self._validation_probe_entry_sent = False
         self._validation_probe_exit_sent = False
         self._validation_probe_position_open_bar: int | None = None
+        self._session_started_monotonic: float | None = None
+        self._feed_event_count = 0
+        self._feed_event_type_counts: Counter[str] = Counter()
+        self._first_feed_event_type: str | None = None
+        self._last_feed_event_type: str | None = None
+        self._last_feed_event_payload: dict[str, Any] = {}
+        self._last_feed_event_at: str | None = None
+        self._first_bar_delay_sec: float | None = None
+        self._first_live_bar_delay_sec: float | None = None
+        self._processed_backfill_bars = 0
+        self._processed_live_bars = 0
         if self.budget_guard is None and self.config.mode == "live" and self.config.budget_guard_enabled:
             self.budget_guard = AccountBudgetGuard(broker=self.broker)
 
@@ -333,7 +345,7 @@ class RuntimeEngine:
         set_feed_event_cb = getattr(self.feed, "set_event_callback", None)
         if callable(set_feed_event_cb):
             try:
-                set_feed_event_cb(self._event)
+                set_feed_event_cb(self._on_feed_event)
             except Exception:
                 pass
         attach_storage = getattr(self.broker, "attach_storage", None)
@@ -368,6 +380,39 @@ class RuntimeEngine:
             event_type,
             {"run_id": self.run_id, "symbol": self.config.symbol, **payload},
         )
+
+    def _on_feed_event(self, event_type: str, payload: dict[str, object]) -> None:
+        self._feed_event_count += 1
+        self._feed_event_type_counts[str(event_type)] += 1
+        if self._first_feed_event_type is None:
+            self._first_feed_event_type = str(event_type)
+        self._last_feed_event_type = str(event_type)
+        self._last_feed_event_payload = dict(payload)
+        self._last_feed_event_at = datetime.now(timezone.utc).isoformat()
+        self._event(str(event_type), dict(payload))
+
+    def _feed_health_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "feed_event_count": int(self._feed_event_count),
+            "feed_event_type_counts": dict(self._feed_event_type_counts),
+            "first_feed_event_type": self._first_feed_event_type,
+            "last_feed_event_type": self._last_feed_event_type,
+            "last_feed_event_payload": dict(self._last_feed_event_payload),
+            "last_feed_event_at": self._last_feed_event_at,
+            "first_bar_delay_sec": self._first_bar_delay_sec,
+            "first_live_bar_delay_sec": self._first_live_bar_delay_sec,
+            "processed_backfill_bars": int(self._processed_backfill_bars),
+            "processed_live_bars": int(self._processed_live_bars),
+        }
+        health_snapshot = getattr(self.feed, "get_health_snapshot", None)
+        if callable(health_snapshot):
+            try:
+                snap = health_snapshot()
+                if isinstance(snap, dict):
+                    payload["feed_health"] = snap
+            except Exception:
+                payload["feed_health"] = {"error": "snapshot_failed"}
+        return payload
 
     def _latest_mark_price(self) -> float:
         if self._bars:
@@ -2086,6 +2131,8 @@ class RuntimeEngine:
             "halt_reason": self._halt_reason,
             "equity": equity,
             "drawdown_pct": drawdown,
+            "processed_live_bars": self._processed_live_bars,
+            "processed_backfill_bars": self._processed_backfill_bars,
             "broker": self._broker_label(),
             "strategy": self.config.strategy_name,
             "strategy_params": dict(self.config.strategy_params),
@@ -2125,6 +2172,7 @@ class RuntimeEngine:
             "protective_fail_count": self._protective_fail_count,
             "min_entry_notional_block_count": self._min_entry_notional_block_count,
             "min_entry_notional_block_samples": list(self._min_entry_notional_samples),
+            **self._feed_health_payload(),
         }
 
     def _maybe_send_heartbeat(self, *, bar: LiveBar) -> None:
@@ -2258,6 +2306,17 @@ class RuntimeEngine:
         self._session_started = True
         self._session_processed = 0
         self._last_bar_recv_monotonic = None
+        self._session_started_monotonic = time.monotonic()
+        self._feed_event_count = 0
+        self._feed_event_type_counts = Counter()
+        self._first_feed_event_type = None
+        self._last_feed_event_type = None
+        self._last_feed_event_payload = {}
+        self._last_feed_event_at = None
+        self._first_bar_delay_sec = None
+        self._first_live_bar_delay_sec = None
+        self._processed_backfill_bars = 0
+        self._processed_live_bars = 0
         profile = self._runtime_profile_payload()
         self._event("runtime_started", profile)
         self._event("runtime_profile", profile)
@@ -2272,6 +2331,39 @@ class RuntimeEngine:
         if self._resume_last_bar_ts is not None and bar_ts <= self._resume_last_bar_ts:
             return True
         try:
+            if self._first_bar_delay_sec is None and self._session_started_monotonic is not None:
+                self._first_bar_delay_sec = float(max(time.monotonic() - self._session_started_monotonic, 0.0))
+                self._event(
+                    "first_bar_dispatched",
+                    {
+                        "bar_ts": str(bar_ts),
+                        "is_backfill": bool(getattr(bar, "is_backfill", False)),
+                        **self._feed_health_payload(),
+                    },
+                )
+                self._event(
+                    "first_bar_processed",
+                    {
+                        "bar_ts": str(bar_ts),
+                        "delay_sec": self._first_bar_delay_sec,
+                        "is_backfill": bool(getattr(bar, "is_backfill", False)),
+                        **self._feed_health_payload(),
+                    },
+                )
+            if (
+                not bool(getattr(bar, "is_backfill", False))
+                and self._first_live_bar_delay_sec is None
+                and self._session_started_monotonic is not None
+            ):
+                self._first_live_bar_delay_sec = float(max(time.monotonic() - self._session_started_monotonic, 0.0))
+                self._event(
+                    "first_live_bar_processed",
+                    {
+                        "bar_ts": str(bar_ts),
+                        "delay_sec": self._first_live_bar_delay_sec,
+                        **self._feed_health_payload(),
+                    },
+                )
             recv_now = time.monotonic()
             if self.config.feed_stall_timeout_sec > 0 and self._last_bar_recv_monotonic is not None:
                 recv_gap_sec = recv_now - self._last_bar_recv_monotonic
@@ -2369,6 +2461,10 @@ class RuntimeEngine:
             self._processed_bars += 1
             self._session_processed += 1
             self._last_processed_bar_ts = bar_ts
+            if bool(getattr(bar, "is_backfill", False)):
+                self._processed_backfill_bars += 1
+            else:
+                self._processed_live_bars += 1
 
             if self._processed_bars % self.config.state_save_every_n_bars == 0:
                 self._save_runtime_state(last_bar_ts=bar_ts)
@@ -2395,6 +2491,18 @@ class RuntimeEngine:
         if last_ts is None and self._bars:
             last_ts = pd.to_datetime(self._bars[-1].timestamp, utc=True)
         self._save_runtime_state(last_bar_ts=last_ts)
+        session_elapsed_sec = 0.0
+        if self._session_started_monotonic is not None:
+            session_elapsed_sec = float(max(time.monotonic() - self._session_started_monotonic, 0.0))
+        feed_health = self._feed_health_payload()
+        if self._session_processed == 0:
+            self._event(
+                "zero_bar_session_detected",
+                {
+                    "session_elapsed_sec": session_elapsed_sec,
+                    **feed_health,
+                },
+            )
         self._event(
             "runtime_stopped",
             {
@@ -2402,6 +2510,8 @@ class RuntimeEngine:
                 "processed_total": self._processed_bars,
                 "halted": self.halted,
                 "halt_reason": self._halt_reason,
+                "session_elapsed_sec": session_elapsed_sec,
+                **feed_health,
             },
         )
         self._session_started = False
@@ -2409,8 +2519,16 @@ class RuntimeEngine:
             "run_id": self.run_id,
             "processed_bars": self._session_processed,
             "processed_total": self._processed_bars,
+            "processed_live_bars": self._processed_live_bars,
+            "processed_backfill_bars": self._processed_backfill_bars,
             "halted": self.halted,
             "halt_reason": self._halt_reason,
+            "session_elapsed_sec": session_elapsed_sec,
+            "feed_event_count": int(self._feed_event_count),
+            "first_feed_event_type": self._first_feed_event_type,
+            "last_feed_event_type": self._last_feed_event_type,
+            "first_bar_delay_sec": self._first_bar_delay_sec,
+            "first_live_bar_delay_sec": self._first_live_bar_delay_sec,
         }
 
     def run(self) -> dict[str, object]:
@@ -2522,11 +2640,21 @@ class RuntimeOrchestrator:
         if not self.engines:
             return {"run_id": "", "processed_total": 0, "halted": False, "symbols": {}}
         run_id = next(iter(self.engines.values())).run_id
-        events_q: queue.Queue[tuple[str, LiveBar | None, Exception | None, bool]] = queue.Queue()
+        events_q: queue.Queue[dict[str, Any]] = queue.Queue()
         global_stop_event = threading.Event()
         symbol_stop_events = {symbol: threading.Event() for symbol in self.feeds}
         threads: list[threading.Thread] = []
         symbol_results: dict[str, dict[str, Any]] = {}
+
+        def _queue_feed_event(symbol: str, event_type: str, payload: dict[str, Any] | None = None) -> None:
+            events_q.put(
+                {
+                    "kind": "feed_event",
+                    "symbol": symbol,
+                    "event_type": str(event_type),
+                    "payload": dict(payload or {}),
+                }
+            )
 
         def _feed_worker(
             symbol: str,
@@ -2535,15 +2663,75 @@ class RuntimeOrchestrator:
             stop_event: threading.Event,
             symbol_stop_event: threading.Event,
         ) -> None:
+            thread_name = threading.current_thread().name
             try:
+                _queue_feed_event(
+                    symbol,
+                    "feed_worker_thread_started",
+                    {
+                        "thread_name": thread_name,
+                        "timeframe": getattr(feed, "timeframe", ""),
+                        "mode": getattr(feed, "mode", ""),
+                        "max_bars": max_bars,
+                        "multisymbol_mode": len(self.feeds) > 1,
+                        "symbols_total": len(self.feeds),
+                    },
+                )
+                if stop_event.is_set() or symbol_stop_event.is_set():
+                    _queue_feed_event(
+                        symbol,
+                        "feed_worker_stop_requested_before_start",
+                        {
+                            "thread_name": thread_name,
+                            "global_stop": stop_event.is_set(),
+                            "symbol_stop": symbol_stop_event.is_set(),
+                        },
+                    )
+                    return
+                _queue_feed_event(
+                    symbol,
+                    "feed_worker_entered",
+                    {
+                        "thread_name": thread_name,
+                        "timeframe": getattr(feed, "timeframe", ""),
+                        "mode": getattr(feed, "mode", ""),
+                    },
+                )
+                _queue_feed_event(
+                    symbol,
+                    "feed_worker_entered_iter_closed_bars",
+                    {
+                        "thread_name": thread_name,
+                        "max_bars": max_bars,
+                        "timeframe": getattr(feed, "timeframe", ""),
+                        "mode": getattr(feed, "mode", ""),
+                    },
+                )
                 for bar in feed.iter_closed_bars(max_bars=max_bars):
                     if stop_event.is_set() or symbol_stop_event.is_set():
                         break
-                    events_q.put((symbol, bar, None, False))
+                    events_q.put({"kind": "bar", "symbol": symbol, "bar": bar})
             except Exception as exc:
-                events_q.put((symbol, None, exc, False))
+                _queue_feed_event(
+                    symbol,
+                    "feed_worker_exception",
+                    {
+                        "thread_name": thread_name,
+                        "error": str(exc),
+                    },
+                )
+                events_q.put({"kind": "error", "symbol": symbol, "error": exc})
             finally:
-                events_q.put((symbol, None, None, True))
+                _queue_feed_event(
+                    symbol,
+                    "feed_worker_completed",
+                    {
+                        "thread_name": thread_name,
+                        "global_stop": stop_event.is_set(),
+                        "symbol_stop": symbol_stop_event.is_set(),
+                    },
+                )
+                events_q.put({"kind": "done", "symbol": symbol})
 
         try:
             for symbol, engine in self.engines.items():
@@ -2551,6 +2739,32 @@ class RuntimeOrchestrator:
             if any(engine.halted for engine in self.engines.values()):
                 global_stop_event.set()
             for symbol, feed in self.feeds.items():
+                set_feed_event_cb = getattr(feed, "set_event_callback", None)
+                if callable(set_feed_event_cb):
+                    try:
+                        set_feed_event_cb(
+                            lambda event_type, payload, _symbol=symbol: _queue_feed_event(
+                                _symbol,
+                                str(event_type),
+                                dict(payload) if isinstance(payload, dict) else {"detail": payload},
+                            )
+                        )
+                    except Exception:
+                        pass
+                engine = self.engines.get(symbol)
+                if engine is not None:
+                    engine._event(
+                        "feed_worker_thread_created",
+                        {
+                            "thread_name": f"feed-{symbol.replace('/', '')}",
+                            "timeframe": getattr(feed, "timeframe", ""),
+                            "mode": getattr(feed, "mode", ""),
+                            "max_bars": self.max_bars,
+                            "multisymbol_mode": len(self.feeds) > 1,
+                            "symbols_total": len(self.feeds),
+                            "symbols": sorted(self.feeds.keys()),
+                        },
+                    )
                 t = threading.Thread(
                     target=_feed_worker,
                     args=(symbol, feed, self.max_bars, global_stop_event, symbol_stop_events[symbol]),
@@ -2563,26 +2777,38 @@ class RuntimeOrchestrator:
             done_symbols: set[str] = set()
             while len(done_symbols) < len(self.feeds):
                 try:
-                    symbol, bar, error, is_done = events_q.get(timeout=1.0)
+                    item = events_q.get(timeout=1.0)
                 except queue.Empty:
                     if global_stop_event.is_set():
                         break
                     continue
-                if error is not None:
+                symbol = str(item.get("symbol", ""))
+                kind = str(item.get("kind", ""))
+                engine = self.engines.get(symbol)
+                if kind == "feed_event":
+                    if engine is not None:
+                        payload = item.get("payload")
+                        engine._on_feed_event(
+                            str(item.get("event_type", "feed_event")),
+                            dict(payload) if isinstance(payload, dict) else {},
+                        )
+                    continue
+                if kind == "error":
+                    error = item.get("error")
                     if symbol_stop_events.get(symbol) is not None and symbol_stop_events[symbol].is_set():
                         done_symbols.add(symbol)
                         continue
                     global_stop_event.set()
                     raise RuntimeError(f"feed worker failed for {symbol}: {error}") from error
-                if is_done:
+                if kind == "done":
                     done_symbols.add(symbol)
                     continue
+                bar = item.get("bar")
                 if bar is None or global_stop_event.is_set():
                     continue
                 symbol_stop = symbol_stop_events.get(symbol)
                 if symbol_stop is not None and symbol_stop.is_set():
                     continue
-                engine = self.engines.get(symbol)
                 if engine is None:
                     continue
                 keep_running = engine.process_bar(bar)

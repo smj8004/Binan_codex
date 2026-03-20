@@ -3,12 +3,16 @@ param(
     [string]$Symbols = "BTC/USDT,ETH/USDT,BNB/USDT",
     [double]$Hours = 12.0,
     [int]$SnapshotEverySec = 300,
+    [string]$Timeframe = "4h",
+    [string]$ValidationMode = "real_strategy",
     [string]$Preset = "macd_final_candidate_ops",
     [string]$FixedNotionalUsdt = "250",
     [string]$MinEntryNotionalUsdt = "250",
     [string]$Leverage = "20",
     [string]$OutDir = "out/operational_validation/macd_final_candidate_testnet_long",
     [int]$MaxBars = 0,
+    [switch]$RealtimeOnly,
+    [switch]$StopAfterFirstLiveBar,
     [int]$MaxWallBufferMinutes = 30,
     [int]$StartupRunIdTimeoutMinutes = 5
 )
@@ -18,6 +22,34 @@ $ErrorActionPreference = "Stop"
 function Write-Header([string]$Text) {
     Write-Host ""
     Write-Host "==== $Text ===="
+}
+
+function Get-TimeframeSeconds([string]$Value) {
+    $text = [string]$Value
+    if ($text -match "^\d+m$") {
+        return [int]$text.TrimEnd("m") * 60
+    }
+    if ($text -match "^\d+h$") {
+        return [int]$text.TrimEnd("h") * 3600
+    }
+    if ($text -match "^\d+d$") {
+        return [int]$text.TrimEnd("d") * 86400
+    }
+    throw "Unsupported timeframe: $Value"
+}
+
+function Get-NextCloseInfo([string]$Value, [datetime]$FromUtc) {
+    $spanSec = Get-TimeframeSeconds -Value $Value
+    $fromOffset = [DateTimeOffset]::new($FromUtc.ToUniversalTime())
+    $epochSec = [int64]$fromOffset.ToUnixTimeSeconds()
+    $nextSec = ([int64][Math]::Floor($epochSec / $spanSec) + 1) * $spanSec
+    $nextClose = [DateTimeOffset]::FromUnixTimeSeconds($nextSec).UtcDateTime
+    return [pscustomobject]@{
+        timeframe = $Value
+        expected_next_close_utc = $nextClose.ToString("o")
+        minutes_until_next_close = [Math]::Round(($nextClose - $FromUtc.ToUniversalTime()).TotalMinutes, 2)
+        seconds_until_next_close = [Math]::Round(($nextClose - $FromUtc.ToUniversalTime()).TotalSeconds, 2)
+    }
 }
 
 function Get-LatestRunId([string]$DbPath) {
@@ -481,6 +513,28 @@ if ($Hours -le 0) {
 if ($SnapshotEverySec -lt 60) {
     throw "SnapshotEverySec must be >= 60"
 }
+$ValidationMode = [string]$ValidationMode
+if ($ValidationMode -notin @("real_strategy", "pipeline_proof")) {
+    throw "ValidationMode must be one of: real_strategy, pipeline_proof"
+}
+$effectiveTimeframe = [string]$Timeframe
+$effectiveRealtimeOnly = [bool]$RealtimeOnly
+$effectiveMaxBars = [int]$MaxBars
+if ($ValidationMode -eq "pipeline_proof") {
+    if (-not $PSBoundParameters.ContainsKey("Timeframe")) {
+        $effectiveTimeframe = "1m"
+    }
+    if (-not $PSBoundParameters.ContainsKey("RealtimeOnly")) {
+        $effectiveRealtimeOnly = $true
+    }
+    if ($effectiveMaxBars -le 0) {
+        $effectiveMaxBars = 1
+    }
+}
+if ($StopAfterFirstLiveBar) {
+    $effectiveRealtimeOnly = $true
+    $effectiveMaxBars = 1
+}
 $fixedNotionalValue = [double]$FixedNotionalUsdt
 $minEntryNotionalValue = [double]$MinEntryNotionalUsdt
 if ($fixedNotionalValue -lt $minEntryNotionalValue) {
@@ -509,6 +563,12 @@ $env:VALIDATION_ALLOW_LIVE_BACKFILL_EXECUTION = "true"
 $dbPath = (Resolve-Path "data/trader.db").Path
 $preRunLatest = Get-LatestRunId -DbPath $dbPath
 $startUtc = (Get-Date).ToUniversalTime()
+$nextCloseInfo = Get-NextCloseInfo -Value $effectiveTimeframe -FromUtc $startUtc
+$stopPolicy = if ($StopAfterFirstLiveBar) { "graceful_after_first_live_bar" } elseif ($effectiveMaxBars -gt 0) { "graceful_after_max_bars" } else { "wall_deadline" }
+$strategyEvidenceAllowed = ($ValidationMode -eq "real_strategy")
+$pipelineProofMode = ($ValidationMode -eq "pipeline_proof")
+$forcedStopApplied = $false
+$forcedStopReason = ""
 
 Write-Header "Doctor Gate"
 $doctorFile = Join-Path $OutDir "doctor_preflight.txt"
@@ -521,25 +581,60 @@ $runStdOut = Join-Path $OutDir "run_stdout.log"
 $runStdErr = Join-Path $OutDir "run_stderr.log"
 $statusFinal = Join-Path $OutDir "status_final.txt"
 $summaryPath = Join-Path $OutDir "summary.json"
+$diagnosticSummaryPath = Join-Path $OutDir "diagnostic_summary.json"
+$diagnosticMarkdownPath = Join-Path $OutDir "diagnostic_summary.md"
+$diagnosticContextPath = Join-Path $OutDir "diagnostic_context.json"
 $reconcileAuditPath = Join-Path $OutDir "reconciliation_audit.json"
 
-$modeArgs = "--mode live --env testnet --data-mode websocket --symbols $Symbols --timeframe 4h --strategy macd_final_candidate --preset $Preset --halt-on-error --budget-usdt auto --yes-i-understand-live-risk"
-if ($MaxBars -gt 0) {
-    $modeArgs = "$modeArgs --max-bars $MaxBars"
+$runArgs = @(
+    "run",
+    "--active",
+    "trader",
+    "run",
+    "--mode", "live",
+    "--env", "testnet",
+    "--data-mode", "websocket",
+    "--symbols", $Symbols,
+    "--timeframe", $effectiveTimeframe,
+    "--strategy", "macd_final_candidate",
+    "--preset", $Preset,
+    "--halt-on-error",
+    "--budget-usdt", "auto",
+    "--yes-i-understand-live-risk"
+)
+if ($effectiveRealtimeOnly) {
+    $runArgs += @("--realtime-only")
 }
-$runCmd = "uv run --active trader run $modeArgs"
+if ($effectiveMaxBars -gt 0) {
+    $runArgs += @("--max-bars", [string]$effectiveMaxBars)
+}
+$runCmd = "uv run --active trader run --mode live --env testnet --data-mode websocket --symbols $Symbols --timeframe $effectiveTimeframe --strategy macd_final_candidate --preset $Preset --halt-on-error --budget-usdt auto --yes-i-understand-live-risk"
+if ($effectiveRealtimeOnly) {
+    $runCmd = "$runCmd --realtime-only"
+}
+if ($effectiveMaxBars -gt 0) {
+    $runCmd = "$runCmd --max-bars $effectiveMaxBars"
+}
 
 Write-Header "Run Command"
 Write-Host $runCmd
 Write-Host "hours=$Hours"
 Write-Host "snapshot_every_sec=$SnapshotEverySec"
+Write-Host "timeframe=$effectiveTimeframe"
+Write-Host "validation_mode=$ValidationMode"
+Write-Host "pipeline_proof_mode=$pipelineProofMode"
+Write-Host "strategy_evidence_allowed=$strategyEvidenceAllowed"
+Write-Host "realtime_only=$effectiveRealtimeOnly"
+Write-Host "stop_policy=$stopPolicy"
+Write-Host "expected_next_close_utc=$($nextCloseInfo.expected_next_close_utc)"
+Write-Host "minutes_until_next_close=$($nextCloseInfo.minutes_until_next_close)"
 Write-Host "preset=$Preset"
 Write-Host "validation_probe_enabled=$($env:VALIDATION_PROBE_ENABLED)"
 Write-Host "validation_allow_live_backfill_execution=$($env:VALIDATION_ALLOW_LIVE_BACKFILL_EXECUTION)"
 
 $proc = Start-Process `
-    -FilePath "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" `
-    -ArgumentList "-NoProfile", "-Command", $runCmd `
+    -FilePath "uv" `
+    -ArgumentList $runArgs `
     -PassThru `
     -RedirectStandardOutput $runStdOut `
     -RedirectStandardError $runStdErr
@@ -608,6 +703,8 @@ while (-not $proc.HasExited) {
     if (-not $runId -and (Get-Date) -ge $runIdDeadline) {
         Write-Warning "No new runtime run_id detected before startup timeout. Stopping runtime process."
         $startupStalled = $true
+        $forcedStopApplied = $true
+        $forcedStopReason = "startup_timeout"
         if ($proc.HasExited) {
             $startupFailureReason = "run process exited before fresh run_id detection"
         } elseif ($firstEventSeen -and -not $runtimeStateSeen) {
@@ -626,6 +723,8 @@ while (-not $proc.HasExited) {
     }
     if ((Get-Date) -ge $deadline) {
         Write-Warning "Wall-clock deadline reached. Stopping runtime process."
+        $forcedStopApplied = $true
+        $forcedStopReason = "wall_deadline"
         try {
             Stop-Process -Id $proc.Id -Force
         } catch {
@@ -740,11 +839,11 @@ if ([int]$logSignals.user_stream_no_running_event_loop -gt 0) {
     $issues += "user_stream_no_running_event_loop"
 }
 
-$verdict = "PASS"
+$lifecycleVerdict = "PASS"
 if ($issues.Count -gt 0) {
-    $verdict = "FAIL"
+    $lifecycleVerdict = "FAIL"
 } elseif ($warnings.Count -gt 0) {
-    $verdict = "WARNING"
+    $lifecycleVerdict = "WARNING"
 }
 
 $accountingDegradedModeUsed = [bool]((
@@ -756,9 +855,23 @@ $accountingDegradedModeUsed = [bool]((
 ))
 
 $summary = [ordered]@{
-    verdict = $verdict
+    verdict = "PENDING"
     mode = "live"
     out_dir = $OutDir
+    validation_mode = $ValidationMode
+    pipeline_proof_mode = $pipelineProofMode
+    evidence_scope = if ($pipelineProofMode) { "runtime_pipeline_only" } else { "real_strategy_runtime" }
+    strategy_evidence_allowed = $strategyEvidenceAllowed
+    strategy_lifecycle_validation_applicable = $strategyEvidenceAllowed
+    primary_verdict_source = "diagnostic_summary.json"
+    strategy_lifecycle_verdict = if ($strategyEvidenceAllowed) { $lifecycleVerdict } else { "not_applicable" }
+    runtime_validation_verdict = ""
+    runtime_chain_proof_advanced = $false
+    feed_runtime_chain_proven = $false
+    long_run_gap_closed = $false
+    diagnostic_verdict = ""
+    diagnostic_reason = ""
+    summary_interpretation = ""
     run_id = $reportedRunId
     previous_latest_run_id = $preRunLatest
     attempted_process_started = $attemptedProcessStarted
@@ -776,11 +889,19 @@ $summary = [ordered]@{
     end_utc = $endUtc.ToString("o")
     duration_minutes = [Math]::Round(($endUtc - $startUtc).TotalMinutes, 2)
     duration_hours = [Math]::Round(($endUtc - $startUtc).TotalHours, 2)
+    timeframe = $effectiveTimeframe
+    realtime_only = $effectiveRealtimeOnly
+    stop_policy = $stopPolicy
+    forced_stop_applied = $forcedStopApplied
+    forced_stop_reason = $forcedStopReason
+    expected_next_close_utc = [string]$nextCloseInfo.expected_next_close_utc
+    minutes_until_next_close_at_start = [double]$nextCloseInfo.minutes_until_next_close
+    seconds_until_next_close_at_start = [double]$nextCloseInfo.seconds_until_next_close
     command = $runCmd
     startup_stalled_before_run_id = $startupStalled
     candidate = [ordered]@{
         strategy = "macd_final_candidate"
-        timeframe = "4h"
+        timeframe = $effectiveTimeframe
         symbols = $Symbols
         preset = $Preset
         fixed_params_ok = [bool]$metrics.fixed_params_ok
@@ -840,8 +961,10 @@ $summary = [ordered]@{
         user_stream_disconnect_count = [int]$logSignals.user_stream_disconnect_count
         user_stream_dns_reconnect_count = [int]$logSignals.user_stream_dns_reconnect_count
     }
-    warnings = $warnings
-    issues = $issues
+    warnings = @()
+    issues = @()
+    strategy_lifecycle_warnings = $warnings
+    strategy_lifecycle_issues = $issues
     recent_errors = $metrics.recent_errors
     artifacts = [ordered]@{
         doctor_preflight = $doctorFile
@@ -874,15 +997,87 @@ $reconcileAudit = [ordered]@{
     protective_lifecycle_anomaly_count = [int]$metrics.protective_lifecycle_anomaly_count
 }
 
+$processExitedBeforeRuntimeStopped = $false
+if ($reportedRunId -and ([int]$metrics.event_counts.runtime_stopped -le 0) -and $proc.HasExited) {
+    $processExitedBeforeRuntimeStopped = $true
+}
+
+$diagnosticContext = [ordered]@{
+    db_path = $dbPath
+    run_id = $reportedRunId
+    previous_latest_run_id = $preRunLatest
+    strategy = "macd_final_candidate"
+    candidate_profile = "macd_final_candidate"
+    mode = "live"
+    env = "testnet"
+    data_mode = "websocket"
+    timeframe = $effectiveTimeframe
+    validation_mode = $ValidationMode
+    pipeline_proof_mode = $pipelineProofMode
+    strategy_evidence_allowed = $strategyEvidenceAllowed
+    realtime_only = $effectiveRealtimeOnly
+    stop_policy = $stopPolicy
+    forced_stop_applied = $forcedStopApplied
+    forced_stop_reason = $forcedStopReason
+    expected_next_close_utc = [string]$nextCloseInfo.expected_next_close_utc
+    minutes_until_next_close_at_start = [double]$nextCloseInfo.minutes_until_next_close
+    seconds_until_next_close_at_start = [double]$nextCloseInfo.seconds_until_next_close
+    symbols = $Symbols
+    preset = $Preset
+    command = $runCmd
+    start_utc = $startUtc.ToString("o")
+    end_utc = $endUtc.ToString("o")
+    startup_phase = $startupPhase
+    startup_failure_reason = $startupFailureReason
+    fresh_run_id_detected = $freshRunIdDetected
+    run_id_detection_source = $runIdDetectionSource
+    first_status_seen = $firstStatusSeen
+    first_event_seen = $firstEventSeen
+    first_event_type = $firstEventType
+    first_event_ts = $firstEventTs
+    exit_code = $exitCode
+    process_exited_before_runtime_stopped = $processExitedBeforeRuntimeStopped
+    doctor_preflight = $doctorFile
+    run_stdout = $runStdOut
+    run_stderr = $runStdErr
+    status_final = $statusFinal
+    status_snapshots = $statusDir
+}
+$diagnosticContext | ConvertTo-Json -Depth 8 | Out-File -FilePath $diagnosticContextPath -Encoding utf8
+python -m trader.runtime_diagnostics --context-path $diagnosticContextPath --output-json $diagnosticSummaryPath --output-md $diagnosticMarkdownPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Runtime diagnostic summary generation failed."
+}
+
+$diagnosticSummary = Get-Content $diagnosticSummaryPath -Raw | ConvertFrom-Json
+$summary["verdict"] = [string]$diagnosticSummary.verdict
+$summary["runtime_validation_verdict"] = [string]$diagnosticSummary.verdict
+$summary["runtime_chain_proof_advanced"] = [bool]$diagnosticSummary.runtime_validation_confidence_advanced
+$summary["feed_runtime_chain_proven"] = [bool]$diagnosticSummary.feed_runtime_chain_proven
+$summary["long_run_gap_closed"] = [bool]$diagnosticSummary.long_run_gap_closed
+$summary["diagnostic_verdict"] = [string]$diagnosticSummary.diagnostic_verdict
+$summary["diagnostic_reason"] = [string]$diagnosticSummary.diagnostic_reason
+$summary["issues"] = @($diagnosticSummary.issues)
+$summary["warnings"] = @($diagnosticSummary.warnings)
+$summary["summary_interpretation"] = if ($pipelineProofMode) {
+    "Pipeline-proof runtime artifact. Top-level verdict reflects runtime-chain validation only; strategy lifecycle fields are informational and not gating."
+} else {
+    "Real-strategy runtime artifact. Top-level verdict reflects the runtime-validation objective for the incumbent path; strategy lifecycle fields remain secondary context."
+}
+
 $summary | ConvertTo-Json -Depth 12 | Out-File -FilePath $summaryPath -Encoding utf8
 $reconcileAudit | ConvertTo-Json -Depth 12 | Out-File -FilePath $reconcileAuditPath -Encoding utf8
 
 Write-Header "Result"
-Write-Host "verdict=$verdict"
+Write-Host "verdict=$($summary.verdict)"
+Write-Host "strategy_lifecycle_verdict=$($summary.strategy_lifecycle_verdict)"
+Write-Host "runtime_validation_verdict=$($summary.runtime_validation_verdict)"
 Write-Host "run_id=$reportedRunId"
 Write-Host "duration_hours=$($summary.duration_hours)"
 Write-Host "orders=$($summary.orders) fills=$($summary.fills) trades=$($summary.trades)"
 Write-Host "fill_provenance=$(([string]($summary.fill_provenance_breakdown | ConvertTo-Json -Compress)))"
-Write-Host "issues=$($issues -join ',')"
-Write-Host "warnings=$($warnings -join ',')"
+Write-Host "issues=$(([string[]]$summary.issues) -join ',')"
+Write-Host "warnings=$(([string[]]$summary.warnings) -join ',')"
 Write-Host "summary=$summaryPath"
+Write-Host "diagnostic_summary=$diagnosticSummaryPath"
+Write-Host "diagnostic_markdown=$diagnosticMarkdownPath"

@@ -1,225 +1,229 @@
-# Research: Binance USDT-M Historical Data and Strategy Search
+# Research Baseline
 
-Date: 2026-03-11
-Scope: Phase A read-only survey before implementation
+Date: 2026-03-20
+Status: planning only, no implementation started
 
-## Goal
+## Scope And Method
 
-- Collect real Binance USDT-M Futures historical candles for:
-  - `BTCUSDT`
-  - `ETHUSDT`
-  - `XRPUSDT`
-  - `TRXUSDT`
-  - `ADAUSDT`
-  - `SOLUSDT`
-- Store reusable local files for the last 1 year, `1h` first, extensible to `15m` and `4h`
-- Reuse existing backtest and experiment patterns where they are already sound
-- Keep live/testnet order code separate from historical research code
+This document records repository understanding only. Facts are evidence-backed from local repo artifacts and official Binance USD-M Futures docs. Hypotheses are labeled explicitly and are verification-oriented only.
 
-## Findings
+Folder inventories reviewed:
+- `docs/*`
+- `guide/*`
+- `out/*`
+- `scripts/*`
+- `trader/*`
+- `tests/*`
 
-| Topic | File path | Evidence | Reusable? | Notes |
-|---|---|---|---|---|
-| Existing historical spot-style downloader | `trader/data/historical.py` | Downloads `/api/v3/klines`, caches CSV, merges by timestamp, but uses spot endpoint naming and `api.binance.com` | Partial | Useful merge/cache ideas, not suitable as-is because this task requires USDT-M Futures historical candles only |
-| Existing generic futures OHLCV fetch via ccxt | `trader/data/binance.py` | `BinanceDataClient` sets `defaultType=future` and has `fetch_ohlcv_range()` with pagination/dedup/sort | Yes | Good low-level fallback/reference; still better to add a dedicated historical module with explicit FAPI mainnet endpoint and file layout |
-| Existing futures bulk downloader | `trader/data/futures_data.py` | Uses `https://fapi.binance.com`, `/fapi/v1/klines`, saves raw/clean data, resamples to `5m/15m/1h/4h` | Yes | Strongest reuse source for endpoint choice, pagination, validation, and interval constants; current output layout is broader than this task needs |
-| Existing backtest engine | `trader/backtest/engine.py` | Expects DataFrame with `timestamp/open/high/low/close/volume`; supports long/short, fees, slippage, latency, limit/market behavior | Yes | This should be the core execution engine for strategy comparison instead of writing a new fill simulator |
-| Existing performance summary | `trader/backtest/metrics.py` | Provides `total_return`, `max_drawdown`, `win_rate`, `profit_factor`, `sharpe_like`, `trades` | Yes | Useful base metrics, but this task still needs extra reporting such as CAGR, fee totals, avg trade return, OOS metrics, and symbol dispersion |
-| Existing optimization/walk-forward pattern | `trader/optimize.py` | Contains parameter grid generation, constraints, export helpers, and rolling train/test window logic | Partial | Useful utilities and design reference; current optimizer is effectively hard-wired to `ema_cross`, so it is not sufficient for fair 3-strategy comparison as-is |
-| Existing experiment suite with CSV/MD outputs | `trader/experiments/runner.py` | Writes `summary.csv/json`, `report.md`, walk-forward tables, and cost-stress outputs under `out/experiments/...` | Yes | Output conventions are worth mirroring for the new research workflow, but the new workflow should stay narrower and symbol-focused |
-| Existing strategy building blocks: EMA | `trader/strategy/ema_cross.py` | Implements stateful EMA cross strategy with optional shorting and stop/take-profit exits | Yes | Direct reuse candidate |
-| Existing strategy building blocks: Donchian | `trader/strategy/trend_family.py` | `TrendDonchianBreakout` already implements Donchian entry/exit logic | Yes | Direct reuse candidate |
-| Existing strategy building blocks: RSI mean reversion | `trader/strategy/meanrev_family.py` | `MeanRevRSIStrategy` exists and is closer to mean-reversion than `trader/strategy/rsi.py` | Partial | Reusable conceptually, but a dedicated research wrapper may still be cleaner for explicit exit-threshold reporting |
-| Existing result export pattern | `trader/optimize.py`, `trader/backtest_compare.py`, `trader/experiments/report.py` | Existing code exports CSV, parquet, JSON, and markdown reports | Yes | New workflow should export CSV + markdown first, consistent with repo usage |
-| Existing cost model location | `trader/backtest/engine.py` | `_fee_rate()`, `_slippage_fraction()`, `_execution_price()` apply taker/maker fee and slippage per fill | Yes | This is the right place to inherit fee/slippage behavior; use `MARKET` orders and taker cost for conservative research runs |
-| Existing live/testnet code path | `trader/cli.py`, `trader/runtime.py`, `trader/broker/live_binance.py`, `trader/broker/paper.py` | Runtime and broker code handle paper/live/testnet execution and order submission | No for modification | This task must not alter those paths; new research code should sit under `trader/research/` and `scripts/` only |
-
-## Current Repo State Summary
-
-### 1. Historical data collection/storage paths already present
-
-- `trader/data/historical.py`
-  - Spot-style downloader with CSV cache under `data/historical`
-  - Good reference for merge/update behavior
-  - Not acceptable as final implementation because it targets spot endpoints
-- `trader/data/futures_data.py`
-  - Futures mainnet downloader with raw/clean/meta layout under `data/futures`
-  - Already fetches USDT-M Futures OHLCV and resamples to higher intervals
-  - Broader than needed for this task, but endpoint and normalization logic are directly relevant
-- `trader/data/binance.py`
-  - Convenient programmatic fetcher for futures OHLCV ranges
-  - Good fallback for quick reads, but this task needs deterministic local file storage and incremental sync
-
-### 2. Binance Futures candle fetch code already reusable
-
-- Best reusable logic source: `trader/data/futures_data.py`
-  - Explicit FAPI mainnet URL
-  - `/fapi/v1/klines`
-  - request throttling and retry flow
-  - dedup/sort/UTC normalization
-- Secondary reusable source: `trader/data/binance.py`
-  - Smaller surface area
-  - good pagination pattern
-- Conclusion:
-  - create a new focused module `trader/data/binance_futures_historical.py`
-  - reuse ideas and constants from existing futures code
-  - keep output layout dedicated to this research task:
-    - `data/futures_historical/BTCUSDT/1h.csv`
-    - `data/futures_historical/ETHUSDT/1h.csv`
-    - ...
-
-### 3. Backtest engine existence and expected input format
-
-- Core engine exists in `trader/backtest/engine.py`
-- Required input columns:
-  - `timestamp`
-  - `open`
-  - `high`
-  - `low`
-  - `close`
-  - `volume`
-- Important engine behaviors already available:
-  - market/limit order handling
-  - next-open or close execution source
-  - slippage in bps or ATR mode
-  - taker/maker fee model
-  - trade list and equity curve output
-- Conclusion:
-  - reuse `BacktestEngine`
-  - keep research runs on `MARKET` orders to make taker fee/slippage assumptions explicit and conservative
-
-### 4. Strategy comparison and result save patterns already present
-
-- `trader/optimize.py`
-  - CSV/parquet export helpers
-  - top-result ranking pattern
+Deep-read files reviewed:
+- `docs/research.md`
+- `docs/plan.md`
+- `docs/todo.md`
+- `docs/decisions.md`
+- `docs/notes.md`
+- `docs/REPO_DIRECTION_2026-03-14.md`
+- `docs/live_entry_sizing_guard.md`
+- `guide/BASELINE_STATE.md`
+- `guide/SYSTEM_CANDIDATES.md`
+- `guide/EXPERIMENT_LOG.md`
+- `guide/INCIDENT_MULTISYMBOL_PRICE_SYNC_2026-03-08.md`
+- `guide/INCIDENT_TESTNET_2014_2026-03-08.md`
+- `guide/INCIDENT_TESTNET_2015_2026-03-08.md`
+- `out/strategy_search_matrix/top_strategies.md`
+- `out/strategy_search_compare/universe_compare/comparison.md`
+- `out/strategy_search_compare/universe_14_regime_vs_1h4h/comparison.md`
+- `out/strategy_search_compare/universe_14_regime_pruned_tightened_vs_pruned/comparison.md`
+- `out/strategy_search_compare/universe_14_regime_stress/stress_comparison.md`
+- `out/strategy_search_compare/final_showdown_donchian_vs_macd/showdown.md`
+- `out/strategy_search_compare/final_showdown_donchian_vs_macd_holdout/holdout_validation.md`
+- `out/strategy_search_compare/macd_extended_holdout_confirmation/macd_extended_holdout_validation.md`
+- `out/operational_validation/macd_final_candidate_paper/summary.json`
+- `out/operational_validation/macd_final_candidate_testnet/summary.json`
+- `out/operational_validation/macd_final_candidate_testnet_long/summary.json`
+- `scripts/run_strategy_search.py`
+- `scripts/run_final_showdown.py`
+- `scripts/run_holdout_validation.py`
+- `trader/research/strategy_search.py`
 - `trader/experiments/runner.py`
-  - structured output directory
-  - `summary.csv`
-  - `summary.json`
-  - `report.md`
-  - walk-forward tables
-- `trader/backtest_compare.py`
-  - leaderboard CSV
-  - per-strategy trade/equity CSV
-- Conclusion:
-  - for this task, keep outputs minimal and explicit:
-    - `out/strategy_search/summary.csv`
-    - `out/strategy_search/by_symbol.csv`
-    - `out/strategy_search/top_strategies.md`
-
-### 5. Cost model handling in existing code
-
+- `trader/experiments/walk_forward.py`
+- `trader/experiments/cost_stress.py`
+- `trader/experiments/regime_gate.py`
 - `trader/backtest/engine.py`
-  - `_fee_rate()` resolves maker/taker fee
-  - `_slippage_fraction()` resolves fixed/ATR/mixed slippage
-  - `_execution_price()` applies slippage on entry/exit
-  - realized trade records include `fee_paid`
-- Existing metrics do not summarize everything required for this task
-  - no direct `fee_cost_total`
-  - no direct `avg_trade_return`
-  - no direct `OOS total_return`
-- Conclusion:
-  - reuse the engine for execution and fee/slippage behavior
-  - compute additional research metrics in the new research module
+- `trader/backtest/metrics.py`
+- `trader/broker/live_binance.py`
+- `trader/broker/paper.py`
+- `trader/runtime.py`
+- `trader/risk/guards.py`
+- `trader/storage.py`
+- `trader/config.py`
+- `trader/funding_rate.py`
+- `trader/funding_arbitrage.py`
+- `trader/strategy/carry.py`
+- `trader/strategy/macd_final_candidate.py`
+- `tests/test_strategy_search.py`
+- `tests/test_multisymbol_runtime_sync.py`
+- `tests/test_runtime_live_recovery.py`
+- `tests/test_runtime_min_order_guard.py`
+- `tests/test_runtime_protective_fail_safe.py`
+- `tests/test_live_testnet_order_path_smoke.py`
 
-### 6. Live/testnet vs historical backtest separation
+Official Binance docs verified:
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Exchange-Information`
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/New-Order`
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-History`
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams`
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/websocket-market-streams/Kline-Candlestick-Streams`
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Event-Order-Update`
+- `https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Event-Balance-and-Position-Update`
 
-- Live/testnet order flow is already isolated in:
-  - `trader/runtime.py`
-  - `trader/broker/live_binance.py`
-  - `trader/broker/paper.py`
-  - `trader/cli.py`
-- Historical experiments/backtests are already separate in:
-  - `trader/backtest/*`
-  - `trader/optimize.py`
-  - `trader/experiments/*`
-- Conclusion:
-  - do not modify runtime or broker live/testnet paths
-  - add new historical-only code under:
-    - `trader/data/binance_futures_historical.py`
-    - `trader/research/strategy_search.py`
-    - `scripts/fetch_futures_historical.py`
-    - `scripts/run_strategy_search.py`
+## Facts
 
-## Recommended Reuse Decisions
+### Architecture Map
 
-1. Reuse `trader/backtest/engine.py` as the common execution/cost engine.
-2. Reuse strategy implementations where they are already close to the requirement:
-   - `trader/strategy/ema_cross.py`
-   - `trader/strategy/trend_family.py` (`TrendDonchianBreakout`)
-3. Reuse the output/reporting style from `trader/experiments/runner.py`, but produce lighter CSV/MD artifacts.
-4. Add a new dedicated futures historical downloader instead of extending live/testnet or broad futures data code.
-5. Keep the new research workflow file-based and reproducible from `scripts/`.
+Research and candidate generation:
+- `trader/research/strategy_search.py` is the newer single-symbol directional strategy search stack.
+- `scripts/run_strategy_search.py`, `scripts/run_final_showdown.py`, and `scripts/run_holdout_validation.py` orchestrate the current broad sweep, showdown, and holdout process.
+- `trader/experiments/runner.py` is a separate portfolio and system-candidate stack. It already defines Track A, Track B, and Track C candidates.
+- `trader/strategy/carry.py` implements carry and carry-momentum logic, but that track is not the currently promoted final candidate path.
 
-## Gaps That Must Be Implemented
+Backtest and realism layer:
+- `trader/backtest/engine.py` is the most realistic shared backtest kernel in the repo.
+- It models maker/taker fees, fixed and ATR-based slippage, limit timeout fallback, latency bars, funding costs when funding-rate data exists, and several sizing modes.
+- `trader/experiments/runner.py` uses `BacktestEngine` in some paths, but the portfolio experiment stack still contains its own simulation logic and reporting flow.
 
-- Dedicated mainnet-only historical futures candle sync to `data/futures_historical/...`
-- Fair parameter search across at least 3 strategy families in one framework
-- Walk-forward or rolling OOS aggregation that produces clear OOS ranking metrics
-- Symbol-level and aggregate comparison CSVs
-- Markdown summary of top strategies ranked by OOS performance
-- Tests for fetch normalization, save/reload ordering, and strategy-search smoke execution
+Runtime and execution layer:
+- `trader/runtime.py` is the main execution/state engine for paper and live modes.
+- `trader/broker/live_binance.py` handles Binance USD-M execution, exchange filters, user-stream integration, and REST reconciliation fallback.
+- `trader/broker/paper.py` is the paper broker used for operational validation and runtime tests.
+- `trader/storage.py` persists runtime state, fills, observability, and run status.
+- `trader/risk/guards.py` enforces order, position, loss, ATR, and allocation limits.
 
-## 2026-03-12 Broad Sweep Discovery Extension
+Validation and evidence:
+- `out/strategy_search_compare/*` holds alpha-selection evidence.
+- `out/operational_validation/*` holds execution/runtime validation evidence.
+- `guide/INCIDENT_*` and `guide/EXPERIMENT_LOG.md` preserve prior failures and fixes.
+- `tests/*` contain focused regression coverage for runtime safety, multisymbol isolation, protective orders, min-notional behavior, and research scripts.
 
-### Why broad sweep now
+### Research Pipeline Map
 
-- single-lever experiments narrowed the search, but no branch passed the OOS hard gate
-- a broader historical-data-first sweep is now more valuable than continuing one-at-a-time tweaks on already weak families
-- the objective is not to prove one favorite strategy; it is to discover which common indicator families remain least-bad after fees, slippage, and rolling OOS
+Current directional research pipeline:
+1. Local historical candles are loaded from `data/futures_historical/<SYMBOL>/<INTERVAL>.csv`.
+2. `scripts/run_strategy_search.py` runs walk-forward search over multiple families in `trader/research/strategy_search.py`.
+3. Candidate ranking uses OOS return, sharpe-like score, breadth, trade counts, and hard-gate logic.
+4. `scripts/run_final_showdown.py` narrows the search to Donchian versus MACD finalist pockets.
+5. `scripts/run_holdout_validation.py` validates finalists on trailing holdout windows.
+6. Winning candidate parameters are frozen into a runtime candidate such as `trader/strategy/macd_final_candidate.py`.
 
-### Historical-data-first rationale
+Current portfolio/system pipeline:
+1. `trader/experiments/runner.py` defines `default_system_candidates()`.
+2. Track A is `carry:momentum`.
+3. Track B is `regime_switch`.
+4. Track C is `breakout:atr_channel`.
+5. The runner supports walk-forward, regime gating, cost stress, and risk templates, but its evidence flow is not the current promoted shortlist path.
 
-- live/testnet execution quality and strategy edge are different problems
-- using only saved Binance USDT-M Futures candles keeps the evaluation reproducible and comparable across families
-- OOS-first ranking is still mandatory even when the sweep is aggressive
+### Execution And Runtime Pipeline Map
 
-### Broad sweep families included
+Execution/runtime flow:
+1. `trader/config.py` builds environment-specific runtime configuration and API-key selection.
+2. `trader/broker/live_binance.py` pulls exchange info, symbol constraints, and live account state.
+3. `trader/runtime.py` sizes entries, applies risk guards, respects min-notional and symbol filters, places entries, then creates reduce-only protective orders.
+4. Runtime state is persisted to `trader/storage.py`.
+5. User-stream events are consumed when available; REST reconciliation fills gaps when user-stream delivery fails.
+6. Multisymbol orchestration uses symbol-scoped state, budget guards, and per-symbol order/fill isolation.
+7. Operational validation outputs are written under `out/operational_validation/*`.
 
-- `ema_cross`
-- `donchian_breakout`
-- `supertrend`
-- `price_adx_breakout`
-- `rsi_mean_reversion`
-- `bollinger`
-- `macd`
-- `stoch_rsi`
+### Invariants That Must Not Break
 
-### Raw matrix size
+- Alpha evidence and operational evidence must remain separate. A runtime PASS does not mean the strategy is profitable.
+- Symbol isolation must hold across order ids, fills, trigger polling, and runtime state.
+- Protective orders must remain reduce-only and must be recreated or trigger emergency flatten-and-halt on failure.
+- Entry sizing must respect exchange constraints, min notional, max position notional, and budget availability.
+- Restart recovery must reconcile live positions and runtime state before taking new action.
+- Runtime should not backfill-trade stale bars in live mode except under explicit validation-probe settings.
+- Research candidate selection must remain OOS-first, not chart-first.
 
-| family | raw combos |
-|---|---:|
-| ema_cross | 50 |
-| donchian_breakout | 12 |
-| supertrend | 12 |
-| price_adx_breakout | 30 |
-| rsi_mean_reversion | 54 |
-| bollinger | 36 |
-| macd | 16 |
-| stoch_rsi | 24 |
-| total | 234 |
+### Current Strengths Already Present
 
-### Budgeted execution shape
+- The repo already distinguishes research outputs from operational validation outputs.
+- The runtime layer is materially more mature than a toy bot, including symbol-filter aware sizing, reduce-only recovery, protective-order lifecycle handling, user-stream plus REST fill reconciliation, storage-backed runtime-state restore, and a shared-budget guard for multisymbol live operation.
+- The test suite already targets real failure classes instead of only unit-level arithmetic.
+- The research stack already moved from naive family sweeps to walk-forward, regime-gated search and explicit holdout validation.
+- There is already evidence-based demotion and promotion of candidates in repo history.
 
-- default broad sweep applies a fair round-robin cap of `96` combos total when `--max-combos` is not set
-- with 8 families selected, that yields `12` combos per family in the default run
-- this keeps the run large enough for discovery while staying safely inside the 6-hour budget
+### Current Gaps Between Backtest And Real Binance Futures Execution
 
-### Result snapshot
+- Funding realism is only partially integrated. `BacktestEngine` can charge funding if candles include `funding_rate`, but the promoted search path does not appear to make funding a first-class input.
+- Track A carry logic exists, but observed funding and premium data are not yet the center of the main shortlist pipeline.
+- The portfolio/system experiment stack and the newer directional search stack are not fully unified around one evidence schema and one realism kernel.
+- The paper broker is operationally useful, but it does not model realistic queue position, adverse selection, or exchange-side partial fill behavior with live fidelity.
+- Long-duration runtime behavior remains weaker than short-path validation. The latest long-run testnet artifact still shows zero processed bars and FAIL.
+- The current research shortlist is heavily shaped by single-symbol directional family search rather than the repo's already-defined Track A/B/C system tracks.
 
-- executed command:
-  - `uv run --active python scripts/run_strategy_search.py --symbols BTCUSDT ETHUSDT XRPUSDT TRXUSDT ADAUSDT SOLUSDT --intervals 1h 4h --mode broad-sweep --time-budget-hours 6`
-- actual run artifacts:
-  - `out/strategy_search_matrix/summary.csv`
-  - `out/strategy_search_matrix/by_symbol.csv`
-  - `out/strategy_search_matrix/window_results.csv`
-  - `out/strategy_search_matrix/top_strategies.md`
-  - `out/strategy_search_matrix/strategy_family_summary.csv`
-- actual broad sweep outcome:
-  - top candidate: `donchian_breakout @ 4h`
-  - `oos_total_return_mean=-0.0035`
-  - `oos_sharpe_mean=-0.5540`
-  - hard-gate pass count: `0`
-- interpretation:
-  - the sweep found relatively better candidates, but still no hard-gate winner on this 1-year / 6-symbol / fee-inclusive setup
+### Hidden Failure Modes Found From Old Tests, Incidents, And Results
+
+- Multisymbol contamination already happened before. `guide/INCIDENT_MULTISYMBOL_PRICE_SYNC_2026-03-08.md` shows symbol-free client order ids and global trigger polling caused cross-symbol fill confusion.
+- Environment-source ambiguity already caused failed testnet access. `guide/INCIDENT_TESTNET_2014_2026-03-08.md` shows shell environment variables silently overrode `.env`.
+- Key/permission mismatches already caused failed testnet authentication. `guide/INCIDENT_TESTNET_2015_2026-03-08.md` shows env-specific key selection was required.
+- Broad family search can produce appealing near-zero or slightly positive candidates that disappear under universe expansion or holdout.
+- Donchian initially won the showdown but failed the stricter 120-day holdout; MACD survived. This is direct evidence that earlier selection logic could still overrate brittle candidates.
+- Operational PASS can coexist with negative short-run PnL. The paper and testnet MACD operational validations passed even though those runs are not profit evidence.
+- User-stream reliability is weak enough that REST reconciliation is not optional. The short testnet PASS shows all fills recovered from REST reconciliation, not from user-stream.
+
+### Existing Reusable Patterns With Exact File Paths
+
+- Track A/B/C reusable candidate definitions: `trader/experiments/runner.py`
+- Realistic shared backtest kernel: `trader/backtest/engine.py`
+- Risk template wrapper and regime gross profiles: `trader/experiments/runner.py`
+- Directional walk-forward and holdout search scaffolding: `trader/research/strategy_search.py`
+- Current finalist orchestration: `scripts/run_final_showdown.py`, `scripts/run_holdout_validation.py`
+- Exchange-filter handling and order normalization: `trader/broker/live_binance.py`
+- Protective-order fail-safe behavior: `trader/runtime.py`, `tests/test_runtime_protective_fail_safe.py`
+- Multisymbol isolation regressions: `tests/test_multisymbol_runtime_sync.py`
+- Live recovery regressions: `tests/test_runtime_live_recovery.py`
+- Min-notional and shared-budget guards: `tests/test_runtime_min_order_guard.py`, `tests/test_live_testnet_order_path_smoke.py`
+- Runtime observability and fill provenance: `trader/storage.py`
+
+### Existing Alpha Evidence
+
+- `out/strategy_search_matrix/top_strategies.md` shows the initial broad sweep on 6 symbols produced zero hard-gate winners.
+- `out/strategy_search_compare/universe_compare/comparison.md` shows universe expansion from 6 to 15 symbols removed the lone weak positive.
+- `out/strategy_search_compare/universe_14_regime_vs_1h4h/comparison.md` shows regime-gated search on 14 symbols materially improved OOS results and hard-gate counts.
+- `out/strategy_search_compare/universe_14_regime_stress/stress_comparison.md` shows MACD and Donchian retained some survivability under fee/slippage stress, with MACD remaining more resilient through later validation.
+- `out/strategy_search_compare/final_showdown_donchian_vs_macd_holdout/holdout_validation.md` shows Donchian failed the 120-day holdout while MACD stayed positive.
+- `out/strategy_search_compare/macd_extended_holdout_confirmation/macd_extended_holdout_validation.md` shows MACD remained positive across 60-day, 90-day, and 120-day holdouts under baseline and mixed_2x stress.
+
+### Existing Execution Safety Evidence
+
+- `out/operational_validation/macd_final_candidate_paper/summary.json` is a PASS for short paper execution-cycle validation.
+- `out/operational_validation/macd_final_candidate_testnet/summary.json` is a PASS for short testnet validation with protective orders, partial fills, and degraded-mode reconciliation.
+- `out/operational_validation/macd_final_candidate_testnet_long/summary.json` is a FAIL for long-duration testnet validation because the full entry-protective-exit cycle was not observed and zero processed bars were recorded.
+- `tests/test_multisymbol_runtime_sync.py`, `tests/test_runtime_live_recovery.py`, and `tests/test_runtime_protective_fail_safe.py` show the runtime layer has explicit regression coverage for previously observed execution failures.
+
+### Binance USD-M Futures Facts Verified Against Official Docs
+
+- Exchange filters must come from `exchangeInfo` filters, not from `pricePrecision` or `quantityPrecision`. Binance explicitly warns not to use those fields as tick size or step size.
+- Exchange info exposes `PRICE_FILTER`, `LOT_SIZE`, `MARKET_LOT_SIZE`, and order-count limits, plus `triggerProtect`.
+- New order semantics that matter here are: `positionSide=BOTH` is the default in one-way mode, `positionSide` must be sent in hedge mode, `reduceOnly` cannot be sent in hedge mode, `newClientOrderId` must be unique among open orders, and order submission consumes order-rate limits, not generic IP-weight only.
+- Kline streams update every 250 ms for the current candle and include an explicit closed-candle flag.
+- Websocket market-stream connections are limited and expire after 24 hours; the runtime must expect reconnects and refresh connection state.
+- Funding history is queried from `/fapi/v1/fundingRate`, returned in ascending order, and the endpoint shares rate limits with funding-info queries.
+- `ACCOUNT_UPDATE` only includes changed positions and funding-fee events can arrive as balance-only or balance-plus-position updates depending on crossed versus isolated context.
+
+## Hypotheses
+
+- Hypothesis H1: Track A is under-explored relative to its potential because carry and premium data exist in the repo but are not yet integrated into the main shortlist pipeline with the same rigor used for MACD/Donchian holdout promotion.
+- Hypothesis H2: The largest remaining runtime risk is liveness and state freshness over long-duration sessions, not basic order semantics. This fits the short PASS and long FAIL pattern, but still requires explicit verification.
+- Hypothesis H3: The research system's biggest architectural weakness is split evidence logic between `trader/research/strategy_search.py` and `trader/experiments/runner.py`, which increases the risk of candidate selection under inconsistent realism assumptions.
+
+## Unknowns And How To Verify Them
+
+- Unknown: whether the portfolio Track A/B/C stack can already pass the same hard-gate and holdout discipline as the newer MACD/Donchian path.
+- Verification: run those tracks through the same candidate-promotion metrics and holdout outputs used by `scripts/run_final_showdown.py` and `scripts/run_holdout_validation.py`.
+- Unknown: whether funding-aware carry models remain positive after realistic funding, fee, and slippage stress on the actual traded universe.
+- Verification: feed observed funding history into the shared backtest kernel and rerun walk-forward plus holdout.
+- Unknown: whether long-run testnet failure is caused by feed liveness, reconnect handling, scheduling, or startup orchestration.
+- Verification: add heartbeat, reconnect, and bar-ingestion observability to runtime validation runs before changing strategy logic.
+- Unknown: whether the currently strongest MACD candidate remains best once Track A/B/C are evaluated under the same gates.
+- Verification: unify promotion criteria and compare all tracks on the same scoreboard.
+- Unknown: whether paper-broker optimism materially changes Track C rankings.
+- Verification: add stricter execution-aware simulation checks before any paper or live promotion.

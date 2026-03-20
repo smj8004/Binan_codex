@@ -162,8 +162,15 @@ def test_multisymbol_entry_price_protective_and_bnb_bars(tmp_path) -> None:
             account_initial_equity=10_000.0,
         )
         result = orchestrator.run()
+        events = storage.list_recent_events_for_run(run_id, limit=200)
+        event_types = [str(row["event_type"]) for row in events]
 
         assert result["halted"] is False
+        assert event_types.count("feed_worker_thread_created") == len(symbols)
+        assert event_types.count("feed_worker_thread_started") == len(symbols)
+        assert event_types.count("feed_worker_entered") == len(symbols)
+        assert event_types.count("feed_worker_entered_iter_closed_bars") == len(symbols)
+        assert event_types.count("feed_worker_completed") == len(symbols)
         symbol_results = result["symbols"]
         for sym, closes in symbols.items():
             sym_result = symbol_results[sym]

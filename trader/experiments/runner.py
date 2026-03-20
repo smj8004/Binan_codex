@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 from trader.backtest.engine import BacktestConfig, BacktestEngine, BacktestResult
+from trader.research.promotion import build_promotion_record, sort_promotion_records
 from trader.strategy.base import Bar, Strategy, StrategyPosition
 from trader.strategy.bollinger import BollingerBandStrategy
 from trader.strategy.ema_cross import EMACrossStrategy
@@ -459,7 +460,21 @@ def load_candles(
     if data_source == "csv":
         if not csv_path:
             raise ValueError("csv_path is required when data_source=csv")
-        df = pd.read_csv(csv_path)
+        csv_target = Path(csv_path)
+        if csv_target.is_dir():
+            normalized_symbol = str(symbol).upper()
+            candidate_paths = [
+                csv_target / normalized_symbol / f"{timeframe}.csv",
+                csv_target / normalized_symbol.replace("/", "") / f"{timeframe}.csv",
+                csv_target / normalized_symbol.replace("/", "_") / f"{timeframe}.csv",
+            ]
+            selected = next((path for path in candidate_paths if path.exists()), None)
+            if selected is None:
+                raise FileNotFoundError(
+                    f"Could not resolve CSV candles for symbol={symbol} timeframe={timeframe} under {csv_target}"
+                )
+            csv_target = selected
+        df = pd.read_csv(csv_target)
         return _ensure_ohlcv(df)
     if data_source == "synthetic":
         return _generate_synthetic_ohlcv(timeframe=timeframe, start=start, end=end, seed=seed)
@@ -776,6 +791,7 @@ def _extract_metrics(result: BacktestResult, candles: pd.DataFrame) -> dict[str,
 
     return {
         "final_equity": final_equity,
+        "total_return": float(summary.get("total_return", (final_equity / initial) - 1.0 if initial > 0 else 0.0)),
         "net_pnl": net_pnl,
         "cagr": cagr,
         "max_drawdown": float(summary.get("max_drawdown", 0.0)),
@@ -784,6 +800,7 @@ def _extract_metrics(result: BacktestResult, candles: pd.DataFrame) -> dict[str,
         "avg_trade": avg_trade,
         "trade_count": float(trade_count),
         "sharpe_like": float(summary.get("sharpe_like", 0.0)),
+        "fee_cost_total": float(summary.get("fee_cost_total", sum(float(t.fee_paid) for t in result.trades))),
     }
 
 
@@ -805,6 +822,140 @@ def _run_backtest(
     strategy = _build_strategy(strategy_name, strategy_params)
     result = BacktestEngine().run(candles=candles, strategy=strategy, config=cfg)
     return result, _extract_metrics(result, candles)
+
+
+def _run_candidate_slice_backtest(
+    *,
+    candles: pd.DataFrame,
+    strategy_name: str,
+    strategy_params: dict[str, Any],
+    base_config: BacktestConfig,
+    fee_multiplier: float = 1.0,
+    slippage_multiplier: float = 1.0,
+) -> dict[str, float]:
+    _, metrics = _run_backtest(
+        candles=candles,
+        strategy_name=strategy_name,
+        strategy_params=strategy_params,
+        base_config=base_config,
+        overrides={
+            "fee_multiplier": float(fee_multiplier),
+            "slippage_bps": float(base_config.slippage_bps) * float(slippage_multiplier),
+            "atr_slippage_mult": float(base_config.atr_slippage_mult) * float(slippage_multiplier),
+        },
+    )
+    return metrics
+
+
+def _candidate_eval_rows(
+    *,
+    symbols: list[str],
+    timeframe: str,
+    start: str,
+    end: str,
+    strategy_name: str,
+    strategy_params: dict[str, Any],
+    base_config: BacktestConfig,
+    data_source: DataSource,
+    csv_path: str | None,
+    testnet: bool,
+    seed: int,
+    holdout_days: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for idx, symbol in enumerate(symbols):
+        sym_seed = int(seed + idx * 131)
+        candles = load_candles(
+            data_source=data_source,
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            seed=sym_seed,
+            csv_path=csv_path,
+            testnet=testnet,
+        )
+        baseline = _run_candidate_slice_backtest(
+            candles=candles,
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            base_config=replace(base_config, symbol=symbol, timeframe=timeframe),
+        )
+        stress = _run_candidate_slice_backtest(
+            candles=candles,
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            base_config=replace(base_config, symbol=symbol, timeframe=timeframe),
+            fee_multiplier=2.0,
+            slippage_multiplier=2.0,
+        )
+        holdout_end = candles["timestamp"].max()
+        holdout_start = holdout_end - pd.Timedelta(days=int(holdout_days))
+        holdout_candles = candles[candles["timestamp"] >= holdout_start].reset_index(drop=True)
+        holdout = _run_candidate_slice_backtest(
+            candles=holdout_candles,
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            base_config=replace(base_config, symbol=symbol, timeframe=timeframe),
+        )
+        holdout_stress = _run_candidate_slice_backtest(
+            candles=holdout_candles,
+            strategy_name=strategy_name,
+            strategy_params=strategy_params,
+            base_config=replace(base_config, symbol=symbol, timeframe=timeframe),
+            fee_multiplier=2.0,
+            slippage_multiplier=2.0,
+        )
+        rows.append(
+            {
+                "symbol": symbol,
+                "observed_carry_inputs_present": bool("funding_rate" in candles.columns or "premium" in candles.columns),
+                "baseline_total_return": float(baseline["total_return"]),
+                "baseline_sharpe_like": float(baseline["sharpe_like"]),
+                "baseline_trade_count": float(baseline["trade_count"]),
+                "baseline_fee_cost_total": float(baseline["fee_cost_total"]),
+                "stress_total_return": float(stress["total_return"]),
+                "stress_sharpe_like": float(stress["sharpe_like"]),
+                "holdout_total_return": float(holdout["total_return"]),
+                "holdout_sharpe_like": float(holdout["sharpe_like"]),
+                "holdout_trade_count": float(holdout["trade_count"]),
+                "holdout_fee_cost_total": float(holdout["fee_cost_total"]),
+                "holdout_stress_total_return": float(holdout_stress["total_return"]),
+                "holdout_stress_sharpe_like": float(holdout_stress["sharpe_like"]),
+            }
+        )
+    return rows
+
+
+def _aggregate_candidate_eval_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return {
+            "symbol_count": 0.0,
+            "baseline_total_return_mean": 0.0,
+            "baseline_sharpe_like_mean": 0.0,
+            "baseline_trade_count_mean": 0.0,
+            "baseline_positive_symbols": 0.0,
+            "baseline_symbol_return_std": 0.0,
+            "stress_total_return_mean": 0.0,
+            "holdout_total_return_mean": 0.0,
+            "holdout_stress_total_return_mean": 0.0,
+            "holdout_positive_symbols": 0.0,
+            "observed_carry_inputs_present": 0.0,
+        }
+    return {
+        "symbol_count": float(len(frame)),
+        "baseline_total_return_mean": float(frame["baseline_total_return"].mean()),
+        "baseline_sharpe_like_mean": float(frame["baseline_sharpe_like"].mean()),
+        "baseline_trade_count_mean": float(frame["baseline_trade_count"].mean()),
+        "baseline_positive_symbols": float((frame["baseline_total_return"] > 0.0).sum()),
+        "baseline_symbol_return_std": float(frame["baseline_total_return"].std(ddof=0)) if len(frame) > 1 else 0.0,
+        "stress_total_return_mean": float(frame["stress_total_return"].mean()),
+        "holdout_total_return_mean": float(frame["holdout_total_return"].mean()),
+        "holdout_stress_total_return_mean": float(frame["holdout_stress_total_return"].mean()),
+        "holdout_positive_symbols": float((frame["holdout_total_return"] > 0.0).sum()),
+        "observed_carry_inputs_present": float(frame["observed_carry_inputs_present"].mean()) if "observed_carry_inputs_present" in frame.columns else 0.0,
+    }
 
 
 def _parse_float_list(raw: str) -> list[float]:
@@ -5467,7 +5618,7 @@ def _calc_beta_proxy(
         start=start,
         end=end,
         seed=seed + 1,
-        csv_path=csv_path if (data_source == "csv" and symbol.upper() in {"BTC/USDT", "BTCUSDT"}) else None,
+        csv_path=csv_path if data_source == "csv" else None,
         testnet=testnet,
     )
     if sym_df.empty or btc_df.empty:
@@ -5550,6 +5701,8 @@ def run_system_batch(
     walk_step_days: int = 30,
     walk_top_pct: float = 0.15,
     walk_max_candidates: int = 120,
+    holdout_days: int = 120,
+    promotion_only: bool = False,
     fee_multipliers: list[float] | None = None,
     fixed_slippage_bps: list[float] | None = None,
     atr_slippage_mults: list[float] | None = None,
@@ -5565,6 +5718,7 @@ def run_system_batch(
     lat_list = latency_bars or [0, 1, 3]
 
     candidate_outputs: list[dict[str, Any]] = []
+    promotion_rows: list[dict[str, Any]] = []
 
     for ci, candidate in enumerate(systems):
         candidate_dir = batch_dir / candidate.system_id
@@ -5572,56 +5726,108 @@ def run_system_batch(
         symbol_rows: list[dict[str, Any]] = []
 
         for si, symbol in enumerate(symbols):
-            sym_out_root = candidate_dir / "symbols" / _safe_symbol(symbol)
-            out = run_edge_validation(
-                symbol=symbol,
-                timeframe=timeframe,
-                start=start,
-                end=end,
-                strategy_name=candidate.strategy_name,
-                strategy_params=candidate.strategy_params,
-                base_config=base_config,
-                output_root=sym_out_root,
-                seed=seed + (ci * 1000) + (si * 31),
-                data_source=data_source,
-                csv_path=csv_path,
-                testnet=testnet,
-                suite="all",
-                fee_multipliers=fee_list,
-                fixed_slippage_bps=slip_bps_list,
-                atr_slippage_mults=slip_atr_list,
-                slippage_mode="mixed",
-                latency_bars=lat_list,
-                order_models=["market", "limit"],
-                limit_timeout_bars=2,
-                limit_fill_probability=0.9,
-                limit_unfilled_penalty_bps=3.0,
-                walk_train_days=walk_train_days,
-                walk_test_days=walk_test_days,
-                walk_step_days=walk_step_days,
-                walk_top_pct=walk_top_pct,
-                walk_max_candidates=walk_max_candidates,
-                walk_metric="sharpe_like",
-                walk_grid_path=candidate.walk_grid_path,
-                trend_ema_span=48,
-                trend_slope_lookback=8,
-                trend_slope_threshold=0.0015,
-                regime_atr_period=14,
-                regime_vol_lookback=120,
-                regime_vol_percentile=0.65,
-            )
+            sym_seed = seed + (ci * 1000) + (si * 31)
+            if promotion_only:
+                sym_out_root = candidate_dir / "symbols" / _safe_symbol(symbol)
+                sym_out_root.mkdir(parents=True, exist_ok=True)
+                candles = load_candles(
+                    data_source=data_source,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start=start,
+                    end=end,
+                    seed=sym_seed,
+                    csv_path=csv_path,
+                    testnet=testnet,
+                )
+                wf_df, wf_candidates_df, wf_summary = run_walk_forward(
+                    candles=candles,
+                    strategy_name=candidate.strategy_name,
+                    base_strategy_params=candidate.strategy_params,
+                    param_grid_path=candidate.walk_grid_path,
+                    base_config=replace(base_config, symbol=symbol, timeframe=timeframe),
+                    metric="sharpe_like",
+                    train_days=walk_train_days,
+                    test_days=walk_test_days,
+                    step_days=walk_step_days,
+                    top_pct=walk_top_pct,
+                    max_candidates=walk_max_candidates,
+                    seed=sym_seed,
+                    start=start,
+                    end=end,
+                )
+                save_dataframe_csv(wf_df, sym_out_root / "walk_forward_windows.csv")
+                save_dataframe_csv(wf_candidates_df, sym_out_root / "walk_forward_candidates.csv")
+                cost_median = 0.0
+                collapse_score = 0.0
+                regime_pf_mdd_flag = True
+                edge_run_id = ""
+                edge_run_dir = str(sym_out_root)
+                wfo_positive_ratio = float(wf_summary.get("oos_positive_ratio", 0.0))
+                wfo_median_sharpe_like = float(wf_summary.get("oos_median_best_test_sharpe_like", 0.0))
+                cost_positive_ratio = 0.0
+                cost_median_trade_count = 0.0
+                regime_best_profit_factor = 0.0
+                regime_best_max_drawdown = 0.0
+            else:
+                sym_out_root = candidate_dir / "symbols" / _safe_symbol(symbol)
+                out = run_edge_validation(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start=start,
+                    end=end,
+                    strategy_name=candidate.strategy_name,
+                    strategy_params=candidate.strategy_params,
+                    base_config=base_config,
+                    output_root=sym_out_root,
+                    seed=sym_seed,
+                    data_source=data_source,
+                    csv_path=csv_path,
+                    testnet=testnet,
+                    suite="all",
+                    fee_multipliers=fee_list,
+                    fixed_slippage_bps=slip_bps_list,
+                    atr_slippage_mults=slip_atr_list,
+                    slippage_mode="mixed",
+                    latency_bars=lat_list,
+                    order_models=["market", "limit"],
+                    limit_timeout_bars=2,
+                    limit_fill_probability=0.9,
+                    limit_unfilled_penalty_bps=3.0,
+                    walk_train_days=walk_train_days,
+                    walk_test_days=walk_test_days,
+                    walk_step_days=walk_step_days,
+                    walk_top_pct=walk_top_pct,
+                    walk_max_candidates=walk_max_candidates,
+                    walk_metric="sharpe_like",
+                    walk_grid_path=candidate.walk_grid_path,
+                    trend_ema_span=48,
+                    trend_slope_lookback=8,
+                    trend_slope_threshold=0.0015,
+                    regime_atr_period=14,
+                    regime_vol_lookback=120,
+                    regime_vol_percentile=0.65,
+                )
 
-            cost_df = pd.read_csv(out.files["cost_csv"])
-            regime_df = pd.read_csv(out.files["regime_csv"])
-            cost_median = float(cost_df["net_pnl"].median()) if not cost_df.empty else 0.0
-            cost_min = float(cost_df["net_pnl"].min()) if not cost_df.empty else 0.0
-            collapse_score = (cost_median - cost_min) / (abs(cost_median) + 1e-9) if cost_median != 0 else float("inf")
+                cost_df = pd.read_csv(out.files["cost_csv"])
+                regime_df = pd.read_csv(out.files["regime_csv"])
+                cost_median = float(cost_df["net_pnl"].median()) if not cost_df.empty else 0.0
+                cost_min = float(cost_df["net_pnl"].min()) if not cost_df.empty else 0.0
+                collapse_score = (cost_median - cost_min) / (abs(cost_median) + 1e-9) if cost_median != 0 else float("inf")
 
-            regime_pf_mdd_flag = False
-            if not regime_df.empty:
-                pf_cond = regime_df["profit_factor"] > 1.1
-                mdd_cond = regime_df["max_drawdown"] > regime_df["max_drawdown"].median()
-                regime_pf_mdd_flag = bool((pf_cond & mdd_cond).any())
+                regime_pf_mdd_flag = False
+                if not regime_df.empty:
+                    pf_cond = regime_df["profit_factor"] > 1.1
+                    mdd_cond = regime_df["max_drawdown"] > regime_df["max_drawdown"].median()
+                    regime_pf_mdd_flag = bool((pf_cond & mdd_cond).any())
+                edge_run_id = out.run_id
+                edge_run_dir = str(out.run_dir)
+                wfo_positive_ratio = float(out.summary.get("wfo_oos_positive_ratio", 0.0))
+                wfo_median_sharpe_like = float(out.summary.get("wfo_median_sharpe_like", 0.0))
+                cost_positive_ratio = float(out.summary.get("cost_positive_ratio", 0.0))
+                cost_median_trade_count = float(out.summary.get("cost_median_trade_count", 0.0))
+                regime_best_profit_factor = float(out.summary.get("regime_best_profit_factor", 0.0))
+                regime_best_max_drawdown = float(out.summary.get("regime_best_max_drawdown", 0.0))
 
             beta = _calc_beta_proxy(
                 symbol=symbol,
@@ -5637,40 +5843,90 @@ def run_system_batch(
             symbol_rows.append(
                 {
                     "symbol": symbol,
-                    "edge_run_id": out.run_id,
-                    "edge_run_dir": str(out.run_dir),
-                    "wfo_oos_positive_ratio": float(out.summary.get("wfo_oos_positive_ratio", 0.0)),
-                    "cost_positive_ratio": float(out.summary.get("cost_positive_ratio", 0.0)),
-                    "cost_median_trade_count": float(out.summary.get("cost_median_trade_count", 0.0)),
-                    "regime_best_profit_factor": float(out.summary.get("regime_best_profit_factor", 0.0)),
-                    "regime_best_max_drawdown": float(out.summary.get("regime_best_max_drawdown", 0.0)),
+                    "edge_run_id": edge_run_id,
+                    "edge_run_dir": edge_run_dir,
+                    "wfo_oos_positive_ratio": wfo_positive_ratio,
+                    "wfo_median_sharpe_like": wfo_median_sharpe_like,
+                    "cost_positive_ratio": cost_positive_ratio,
+                    "cost_median_trade_count": cost_median_trade_count,
+                    "regime_best_profit_factor": regime_best_profit_factor,
+                    "regime_best_max_drawdown": regime_best_max_drawdown,
                     "cost_collapse_score": float(collapse_score),
                     "regime_pf_mdd_flag": regime_pf_mdd_flag,
                     "beta_proxy": beta,
                 }
             )
 
+        fixed_eval_rows = _candidate_eval_rows(
+            symbols=symbols,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            strategy_name=candidate.strategy_name,
+            strategy_params=candidate.strategy_params,
+            base_config=base_config,
+            data_source=data_source,
+            csv_path=csv_path,
+            testnet=testnet,
+            seed=seed + (ci * 1000) + 17,
+            holdout_days=holdout_days,
+        )
+        fixed_eval_df = pd.DataFrame(fixed_eval_rows)
+        fixed_eval_summary = _aggregate_candidate_eval_rows(fixed_eval_rows)
         gates = _evaluate_candidate_gates(candidate_dir, symbol_rows)
         symbol_df = pd.DataFrame(symbol_rows)
         save_dataframe_csv(symbol_df, candidate_dir / "candidate_symbol_summary.csv")
+        save_dataframe_csv(fixed_eval_df, candidate_dir / "candidate_fixed_eval_by_symbol.csv")
         summary_payload = {
             "candidate_id": candidate.system_id,
             "title": candidate.title,
             "track": candidate.track,
             "notes": candidate.notes,
             **gates,
+            **fixed_eval_summary,
         }
         save_json(summary_payload, candidate_dir / "candidate_summary.json")
         save_dataframe_csv(
             pd.DataFrame({"metric": list(summary_payload.keys()), "value": list(summary_payload.values())}),
             candidate_dir / "candidate_summary.csv",
         )
+        promotion_row = build_promotion_record(
+            source_stack="system_batch",
+            candidate_id=candidate.system_id,
+            title=candidate.title,
+            track=candidate.track,
+            strategy_name=candidate.strategy_name,
+            timeframe=timeframe,
+            symbol_count=int(fixed_eval_summary["symbol_count"]),
+            trade_count_mean=float(fixed_eval_summary["baseline_trade_count_mean"]),
+            walk_forward_positive_ratio=float(symbol_df["wfo_oos_positive_ratio"].mean()) if not symbol_df.empty else 0.0,
+            walk_forward_sharpe=float(symbol_df["wfo_median_sharpe_like"].mean()) if "wfo_median_sharpe_like" in symbol_df.columns and not symbol_df.empty else 0.0,
+            stress_total_return_mean=float(fixed_eval_summary["stress_total_return_mean"]),
+            positive_symbols=int(fixed_eval_summary["baseline_positive_symbols"]),
+            symbol_return_std=float(fixed_eval_summary["baseline_symbol_return_std"]),
+            holdout_total_return_mean=float(fixed_eval_summary["holdout_total_return_mean"]),
+            holdout_stress_total_return_mean=float(fixed_eval_summary["holdout_stress_total_return_mean"]),
+            holdout_positive_symbols=int(fixed_eval_summary["holdout_positive_symbols"]),
+            runtime_supported=True,
+            extra={
+                "notes": candidate.notes,
+                "gate_wfo_two_symbols": bool(gates["gate_wfo_two_symbols"]),
+                "gate_cost_robust": bool(gates["gate_cost_robust"]),
+                "gate_regime_consistency": bool(gates["gate_regime_consistency"]),
+                "gate_trade_count": bool(gates["gate_trade_count"]),
+                "baseline_total_return_mean": float(fixed_eval_summary["baseline_total_return_mean"]),
+                "baseline_sharpe_like_mean": float(fixed_eval_summary["baseline_sharpe_like_mean"]),
+                "observed_carry_inputs_present": bool(fixed_eval_summary["observed_carry_inputs_present"] >= 0.999),
+            },
+        )
+        save_dataframe_csv(pd.DataFrame([promotion_row]), candidate_dir / "candidate_promotion.csv")
         report_lines = [
             f"# Candidate Report: {candidate.system_id}",
             "",
             f"- title: {candidate.title}",
             f"- track: {candidate.track}",
             f"- verdict: **{gates['verdict']}**",
+            f"- promotion_decision: **{promotion_row['decision']}**",
             f"- gate_wfo_two_symbols: {gates['gate_wfo_two_symbols']}",
             f"- gate_cost_robust: {gates['gate_cost_robust']}",
             f"- gate_regime_consistency: {gates['gate_regime_consistency']}",
@@ -5678,24 +5934,40 @@ def run_system_batch(
             "",
             "## Symbol Summary",
             ("```csv\n" + symbol_df.to_csv(index=False) + "```") if not symbol_df.empty else "_(no rows)_",
+            "",
+            "## Fixed Eval By Symbol",
+            ("```csv\n" + fixed_eval_df.to_csv(index=False) + "```") if not fixed_eval_df.empty else "_(no rows)_",
         ]
         (candidate_dir / "report.md").write_text("\n".join(report_lines), encoding="utf-8")
 
-        candidate_outputs.append(
-            {
-                "candidate_id": candidate.system_id,
-                "candidate_dir": str(candidate_dir),
-                "verdict": gates["verdict"],
-                "gate_wfo_two_symbols": bool(gates["gate_wfo_two_symbols"]),
-                "gate_cost_robust": bool(gates["gate_cost_robust"]),
-                "gate_regime_consistency": bool(gates["gate_regime_consistency"]),
-                "gate_trade_count": bool(gates["gate_trade_count"]),
-            }
-        )
+        batch_row = {
+            "candidate_id": candidate.system_id,
+            "candidate_dir": str(candidate_dir),
+            "verdict": gates["verdict"],
+            "gate_wfo_two_symbols": bool(gates["gate_wfo_two_symbols"]),
+            "gate_cost_robust": bool(gates["gate_cost_robust"]),
+            "gate_regime_consistency": bool(gates["gate_regime_consistency"]),
+            "gate_trade_count": bool(gates["gate_trade_count"]),
+            "promotion_decision": str(promotion_row["decision"]),
+            "stage_execution_eligible": bool(promotion_row["stage_execution_eligible"]),
+            "holdout_total_return_mean": float(promotion_row["holdout_total_return_mean"]),
+            "holdout_stress_total_return_mean": float(promotion_row["holdout_stress_total_return_mean"]),
+        }
+        candidate_outputs.append(batch_row)
+        promotion_rows.append(promotion_row)
 
     save_dataframe_csv(pd.DataFrame(candidate_outputs), batch_dir / "batch_summary.csv")
-    save_json({"batch_run_id": batch_run_id, "candidates": candidate_outputs}, batch_dir / "batch_summary.json")
-    return SystemBatchOutput(batch_run_id=batch_run_id, batch_dir=batch_dir, candidate_results=candidate_outputs)
+    promotion_df = sort_promotion_records(pd.DataFrame(promotion_rows))
+    save_dataframe_csv(promotion_df, batch_dir / "batch_promotion_summary.csv")
+    save_json(
+        {
+            "batch_run_id": batch_run_id,
+            "candidates": candidate_outputs,
+            "promotion_candidates": promotion_df.to_dict(orient="records"),
+        },
+        batch_dir / "batch_summary.json",
+    )
+    return SystemBatchOutput(batch_run_id=batch_run_id, batch_dir=batch_dir, candidate_results=promotion_df.to_dict(orient="records"))
 
 
 __all__ = [

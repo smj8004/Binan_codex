@@ -42,4 +42,5 @@ def test_system_batch_smoke(tmp_path: Path) -> None:
     )
     assert out.batch_dir.exists()
     assert (out.batch_dir / "batch_summary.csv").exists()
+    assert (out.batch_dir / "batch_promotion_summary.csv").exists()
     assert len(out.candidate_results) == 1

@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from trader.backtest.engine import BacktestConfig, BacktestEngine, BacktestResult
+from trader.research.promotion import build_promotion_record
 from trader.strategy.base import Bar, Strategy, StrategyPosition
 from trader.strategy.ema_cross import EMACrossStrategy
 from trader.strategy.trend_family import TrendDonchianBreakout, TrendSuperTrendStrategy
@@ -811,6 +812,12 @@ class BroadSweepResult:
     summary_df: pd.DataFrame
     by_symbol_df: pd.DataFrame
     family_summary_df: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class BroadCandidateHoldoutResult:
+    summary_df: pd.DataFrame
+    by_symbol_df: pd.DataFrame
 
 
 @dataclass(frozen=True)
@@ -2387,13 +2394,129 @@ def run_broad_sweep_candidates(
     )
 
 
+def run_broad_candidate_holdout(
+    *,
+    symbols: list[str],
+    interval: str,
+    candidate: _BroadCandidate,
+    config: BroadSweepConfig,
+    holdout_days: int,
+) -> BroadCandidateHoldoutResult:
+    engine = BacktestEngine()
+    by_symbol_rows: list[dict[str, Any]] = []
+    for raw_symbol in symbols:
+        symbol = str(raw_symbol).upper()
+        candles = _load_candles_for_interval(symbol=symbol, interval=interval, data_root=config.data_root)
+        holdout_end = candles["timestamp"].max()
+        holdout_start = holdout_end - pd.Timedelta(days=int(holdout_days))
+        holdout_candles = candles[candles["timestamp"] >= holdout_start].reset_index(drop=True)
+        result, coverage_ratio = _run_broad_backtest(
+            candles=holdout_candles,
+            symbol=symbol,
+            interval=interval,
+            candidate=candidate,
+            config=config,
+            engine=engine,
+        )
+        acc = _Accumulator(initial_equity=config.initial_equity, timeframe=interval)
+        acc.add(result=result, start_ts=holdout_candles["timestamp"].min(), end_ts=holdout_candles["timestamp"].max())
+        metrics = acc.metrics()
+        by_symbol_rows.append(
+            {
+                "strategy_family": candidate.strategy_family,
+                "strategy_name": candidate.strategy_name,
+                "interval": interval,
+                "symbol": symbol,
+                "params_json": _json_dumps(candidate.params),
+                "regime_name": candidate.regime_name,
+                "regime_params_json": _json_dumps(candidate.regime_params or {}),
+                "holdout_total_return": float(metrics["total_return"]),
+                "holdout_sharpe": float(metrics["sharpe_like"]),
+                "holdout_max_drawdown": float(metrics["max_drawdown"]),
+                "trade_count": float(metrics["trade_count"]),
+                "fee_cost_total": float(metrics["fee_cost_total"]),
+                "oos_positive": bool(float(metrics["total_return"]) > 0.0),
+                "regime_coverage_ratio": float(coverage_ratio),
+            }
+        )
+
+    by_symbol_df = pd.DataFrame(by_symbol_rows)
+    if by_symbol_df.empty:
+        return BroadCandidateHoldoutResult(summary_df=pd.DataFrame(), by_symbol_df=by_symbol_df)
+    summary_df = pd.DataFrame(
+        [
+            {
+                "strategy_family": candidate.strategy_family,
+                "strategy_name": candidate.strategy_name,
+                "interval": interval,
+                "params_json": _json_dumps(candidate.params),
+                "regime_name": candidate.regime_name,
+                "regime_params_json": _json_dumps(candidate.regime_params or {}),
+                "symbol_count": int(len(by_symbol_df)),
+                "holdout_total_return_mean": float(by_symbol_df["holdout_total_return"].mean()),
+                "holdout_sharpe_mean": float(by_symbol_df["holdout_sharpe"].mean()),
+                "holdout_max_drawdown_mean": float(by_symbol_df["holdout_max_drawdown"].mean()),
+                "holdout_trade_count_mean": float(by_symbol_df["trade_count"].mean()),
+                "positive_symbols": int(by_symbol_df["oos_positive"].sum()),
+                "symbol_return_std": float(by_symbol_df["holdout_total_return"].std(ddof=0)) if len(by_symbol_df) > 1 else 0.0,
+                "regime_coverage_ratio": float(by_symbol_df["regime_coverage_ratio"].mean()),
+            }
+        ]
+    )
+    return BroadCandidateHoldoutResult(summary_df=summary_df, by_symbol_df=by_symbol_df)
+
+
+def build_broad_candidate_promotion_record(
+    *,
+    baseline_summary_row: dict[str, Any] | pd.Series,
+    stress_summary_row: dict[str, Any] | pd.Series,
+    holdout_summary_row: dict[str, Any] | pd.Series,
+    holdout_stress_summary_row: dict[str, Any] | pd.Series,
+    candidate_id: str,
+    title: str,
+    track: str,
+) -> dict[str, Any]:
+    baseline = dict(baseline_summary_row)
+    stress = dict(stress_summary_row)
+    holdout = dict(holdout_summary_row)
+    holdout_stress = dict(holdout_stress_summary_row)
+    return build_promotion_record(
+        source_stack="strategy_search",
+        candidate_id=candidate_id,
+        title=title,
+        track=track,
+        strategy_name=str(baseline["strategy_name"]),
+        timeframe=str(baseline["interval"]),
+        symbol_count=int(baseline["symbol_count"]),
+        trade_count_mean=float(baseline["trade_count_mean"]),
+        walk_forward_positive_ratio=float(baseline["window_oos_positive_ratio_mean"]),
+        walk_forward_sharpe=float(baseline["oos_sharpe_mean"]),
+        stress_total_return_mean=float(stress["oos_total_return_mean"]),
+        positive_symbols=int(baseline["positive_symbols"]),
+        symbol_return_std=float(baseline["symbol_return_std"]),
+        holdout_total_return_mean=float(holdout["holdout_total_return_mean"]),
+        holdout_stress_total_return_mean=float(holdout_stress["holdout_total_return_mean"]),
+        holdout_positive_symbols=int(holdout["positive_symbols"]),
+        runtime_supported=True,
+        extra={
+            "regime_name": str(baseline["regime_name"]),
+            "params_json": str(baseline["params_json"]),
+            "baseline_total_return_mean": float(baseline["oos_total_return_mean"]),
+            "baseline_sharpe_like_mean": float(baseline["oos_sharpe_mean"]),
+        },
+    )
+
+
 __all__ = [
+    "BroadCandidateHoldoutResult",
     "BroadSweepConfig",
     "BroadSweepResult",
     "SUPPORTED_FAMILIES",
     "SUPPORTED_STRATEGIES",
     "StrategySearchConfig",
+    "build_broad_candidate_promotion_record",
     "run_broad_sweep_candidates",
+    "run_broad_candidate_holdout",
     "StrategySearchResult",
     "calculate_adx",
     "run_broad_sweep",
